@@ -1,0 +1,7 @@
+node_modules/
+dist/
+group.db
+group.db-shm
+group.db-wal
+.env
+server/uploads/
