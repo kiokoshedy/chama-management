@@ -1,5 +1,16 @@
 export const currency = 'KSh';
 
+export function todayInKenya(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-KE', {
+    timeZone: 'Africa/Nairobi',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
 export function fmt(n) {
   return `${currency} ${Number(n || 0).toLocaleString('en-KE')}`;
 }
@@ -35,8 +46,8 @@ function deadlineDays(deadline) {
   if (!deadline) return null;
   const parsed = Date.parse(`${deadline}T00:00:00Z`);
   if (Number.isNaN(parsed)) return null;
-  const now = new Date();
-  const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const [year, month, day] = todayInKenya().split('-').map(Number);
+  const today = Date.UTC(year, month - 1, day);
   return Math.round((parsed - today) / 86400000);
 }
 

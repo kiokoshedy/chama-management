@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import bcrypt from 'bcryptjs';
@@ -15,17 +16,16 @@ seedAdmin();
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
 
-const currentPeriod = () => {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-};
+const currentPeriod = () => kenyaDate().slice(0, 7);
 
 const publicMember = (m) => ({
   id: m.id,
   username: m.username,
   display_name: m.display_name,
   bio: m.bio,
+  phone: m.phone || '',
   role: m.role,
   designation: m.designation || '',
   status: m.status,
@@ -45,6 +45,7 @@ const publicPayment = (p) => ({
   period: p.period,
   amount: p.amount,
   fine: p.fine,
+  due_date: p.due_date || null,
   fine_reason: p.fine_reason || '',
   total: Number(p.amount) + Number(p.fine),
   status: p.status,
@@ -76,6 +77,254 @@ function ensureAllPayments() {
     ensureCurrentPayment(id);
   }
 }
+
+const SMS_REMINDER_DAYS = 5;
+const AFRICASTALKING_SMS_URL = {
+  live: process.env.AFRICASTALKING_API_URL || 'https://api.africastalking.com/version1/messaging/bulk',
+  sandbox:
+    process.env.AFRICASTALKING_API_URL || 'https://api.sandbox.africastalking.com/version1/messaging/bulk',
+};
+
+const smsConfig = () => {
+  const environment = String(process.env.AFRICASTALKING_ENV || 'sandbox').toLowerCase();
+  return {
+    username: process.env.AFRICASTALKING_USERNAME || '',
+    apiKey: process.env.AFRICASTALKING_API_KEY || '',
+    senderId: process.env.AFRICASTALKING_SENDER_ID || '',
+    environment: environment === 'live' ? 'live' : 'sandbox',
+  };
+};
+
+const smsConfigured = () => {
+  const config = smsConfig();
+  return Boolean(config.username && config.apiKey && config.senderId);
+};
+
+const kenyaDate = (date = new Date()) => {
+  const parts = new Intl.DateTimeFormat('en-KE', {
+    timeZone: 'Africa/Nairobi',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+  return `${values.year}-${values.month}-${values.day}`;
+};
+
+const addDays = (dateString, days) => {
+  const date = new Date(`${dateString}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+};
+
+const parseDateOnly = (value) => {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const [year, month, day] = value.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return value;
+};
+
+const normalizeKenyanPhone = (value) => {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  const digits = raw.replace(/\D/g, '');
+  let number = digits;
+  if (number.startsWith('0')) number = `254${number.slice(1)}`;
+  else if (number.startsWith('7') && number.length === 9) number = `254${number}`;
+  if (!/^2547\d{8}$/.test(number)) return null;
+  return `+${number}`;
+};
+
+const formatMoney = (amount) =>
+  new Intl.NumberFormat('en-KE', { maximumFractionDigits: 2 }).format(Number(amount || 0));
+
+const reminderMessage = (candidate) => {
+  const label =
+    candidate.kind === 'monthly'
+      ? 'monthly contribution'
+      : `special contribution "${candidate.title}"`;
+  return `Hello ${candidate.displayName}, your ${label} of KSh ${formatMoney(candidate.amount)} is due on ${candidate.dueDate}. Please pay before the due date.`;
+};
+
+const sendAfricaTalkingSms = async (phone, message) => {
+  const config = smsConfig();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20000);
+  let response;
+  try {
+    response = await fetch(AFRICASTALKING_SMS_URL[config.environment], {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        apiKey: config.apiKey,
+      },
+      body: JSON.stringify({
+        username: config.username,
+        message,
+        senderId: config.senderId,
+        phoneNumbers: [phone],
+      }),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error.name === 'AbortError') throw new Error("Africa's Talking request timed out");
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(body.message || `Africa's Talking request failed (${response.status})`);
+  }
+  const recipient =
+    body.SMSMessageData?.Recipients?.[0] ||
+    (body.messageId
+      ? { messageId: body.messageId, status: body.status, statusCode: body.statusCode }
+      : null);
+  const recipientStatus = String(recipient?.status || '').toLowerCase();
+  const failedStatus = /fail|reject|error|invalid/.test(recipientStatus);
+  if (!recipient || Number(recipient.statusCode) >= 400 || failedStatus) {
+    throw new Error(recipient?.message || recipient?.status || "Africa's Talking rejected the message");
+  }
+  if (!recipient.messageId) {
+    throw new Error("Africa's Talking did not return a message ID");
+  }
+  return {
+    providerId: recipient.messageId,
+    providerStatus: recipient.status || String(recipient.statusCode || ''),
+  };
+};
+
+const claimSmsReminder = (candidate, message) => {
+  const result = db
+    .prepare(
+      `INSERT OR IGNORE INTO sms_reminders
+       (reminder_key, kind, payment_id, contribution_id, member_id, phone, message)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      candidate.key,
+      candidate.kind,
+      candidate.paymentId || null,
+      candidate.contributionId || null,
+      candidate.memberId,
+      candidate.phone,
+      message
+    );
+  return result.changes === 1 ? Number(result.lastInsertRowid) : null;
+};
+
+const sendSmsReminder = async (candidate) => {
+  if (!candidate.phone) return { skipped: true, reason: 'missing_phone' };
+  const message = reminderMessage(candidate);
+  const reminderId = claimSmsReminder(candidate, message);
+  if (!reminderId) return { skipped: true, reason: 'already_sent' };
+  try {
+    const result = await sendAfricaTalkingSms(candidate.phone, message);
+    db.prepare(
+      "UPDATE sms_reminders SET provider_id = ?, status = 'sent', error = NULL WHERE id = ?"
+    ).run(result.providerId, reminderId);
+    return { sent: true };
+  } catch (error) {
+    db.prepare('DELETE FROM sms_reminders WHERE id = ?').run(reminderId);
+    return { failed: true, error: error.message };
+  }
+};
+
+let smsReminderRunning = false;
+const runSmsReminders = async () => {
+  if (smsReminderRunning) return { configured: smsConfigured(), skipped: true, reason: 'already_running' };
+  if (!smsConfigured()) return { configured: false, sent: 0, failed: 0, skipped: 0, candidates: 0 };
+  smsReminderRunning = true;
+  try {
+    ensureAllPayments();
+    db.prepare(
+      "DELETE FROM sms_reminders WHERE status = 'sending' AND sent_at < datetime('now', '-30 minutes')"
+    ).run();
+    const todayDate = kenyaDate();
+    const reminderDate = addDays(todayDate, SMS_REMINDER_DAYS);
+    const catchUpDate = addDays(todayDate, SMS_REMINDER_DAYS - 1);
+    const candidates = [];
+    const monthly = db
+      .prepare(
+        `SELECT p.id AS payment_id, p.amount, p.fine, p.due_date,
+                m.id AS member_id, m.display_name, m.phone
+         FROM payments p
+         JOIN members m ON m.id = p.member_id
+         WHERE p.status = 'unpaid' AND p.due_date IN (?, ?) AND m.status = 'active'`
+      )
+      .all(reminderDate, catchUpDate);
+    for (const row of monthly) {
+      candidates.push({
+        key: `monthly:${row.payment_id}:${row.due_date}`,
+        kind: 'monthly',
+        paymentId: row.payment_id,
+        memberId: row.member_id,
+        displayName: row.display_name,
+        phone: row.phone,
+        amount: Number(row.amount) + Number(row.fine || 0),
+        dueDate: row.due_date,
+      });
+    }
+
+    const special = db
+      .prepare(
+        `SELECT c.id AS contribution_id, c.title, c.amount, c.deadline,
+                m.id AS member_id, m.display_name, m.phone
+         FROM contributions c
+         CROSS JOIN members m
+         LEFT JOIN contribution_payments cp
+           ON cp.contribution_id = c.id AND cp.member_id = m.id
+         WHERE c.is_active = 1 AND c.deadline IN (?, ?) AND m.status = 'active'
+           AND (cp.id IS NULL OR cp.status NOT IN ('pending', 'approved'))`
+      )
+      .all(reminderDate, catchUpDate);
+    for (const row of special) {
+      candidates.push({
+        key: `special:${row.contribution_id}:${row.member_id}:${row.deadline}`,
+        kind: 'special',
+        contributionId: row.contribution_id,
+        memberId: row.member_id,
+        displayName: row.display_name,
+        phone: row.phone,
+        title: row.title,
+        amount: row.amount,
+        dueDate: row.deadline,
+      });
+    }
+
+    const results = [];
+    for (const candidate of candidates) results.push(await sendSmsReminder(candidate));
+    return {
+      configured: true,
+      reminder_date: reminderDate,
+      catch_up_date: catchUpDate,
+      candidates: candidates.length,
+      sent: results.filter((result) => result.sent).length,
+      failed: results.filter((result) => result.failed).length,
+      skipped: results.filter((result) => result.skipped).length,
+    };
+  } finally {
+    smsReminderRunning = false;
+  }
+};
+
+const startSmsReminderScheduler = () => {
+  const check = () => {
+    runSmsReminders().catch((error) => console.error('SMS reminder check failed:', error.message));
+  };
+  check();
+  const timer = setInterval(check, 60 * 60 * 1000);
+  timer.unref?.();
+};
 
 // ---- Auth ----
 
@@ -142,12 +391,21 @@ app.get('/api/members/:id', requireActiveUser, (req, res) => {
 });
 
 app.patch('/api/members/me', requireActiveUser, (req, res) => {
-  const { display_name, bio } = req.body || {};
+  const { display_name, bio, phone } = req.body || {};
   const member = db.prepare('SELECT * FROM members WHERE id = ?').get(req.member.id);
   if (!member) return res.status(404).json({ error: 'Member not found' });
-  db.prepare('UPDATE members SET display_name = ?, bio = ? WHERE id = ?').run(
+  let nextPhone = member.phone || '';
+  if (phone != null) {
+    const normalized = normalizeKenyanPhone(phone);
+    if (normalized === null) {
+      return res.status(400).json({ error: 'Enter a valid Kenyan mobile number, e.g. 0712345678' });
+    }
+    nextPhone = normalized;
+  }
+  db.prepare('UPDATE members SET display_name = ?, bio = ?, phone = ? WHERE id = ?').run(
     display_name != null ? String(display_name).trim() : member.display_name,
     bio != null ? String(bio).trim() : member.bio,
+    nextPhone,
     req.member.id
   );
   const updated = db.prepare('SELECT * FROM members WHERE id = ?').get(req.member.id);
@@ -342,6 +600,20 @@ app.post('/api/admin/payments/:id/reject', requireActiveAdmin, (req, res) => {
   res.json({ payment: publicPayment(updated) });
 });
 
+app.patch('/api/admin/payments/:id/due-date', requireActiveAdmin, (req, res) => {
+  const payment = db.prepare('SELECT * FROM payments WHERE id = ?').get(req.params.id);
+  if (!payment) return res.status(404).json({ error: 'Payment not found' });
+  const value = req.body?.due_date;
+  if (value === undefined) return res.status(400).json({ error: 'A due date is required' });
+  const dueDate = value === null || value === '' ? null : parseDateOnly(value);
+  if (value !== null && value !== '' && !dueDate) {
+    return res.status(400).json({ error: 'Due date must be a valid date (YYYY-MM-DD)' });
+  }
+  db.prepare('UPDATE payments SET due_date = ? WHERE id = ?').run(dueDate, payment.id);
+  const updated = db.prepare('SELECT * FROM payments WHERE id = ?').get(payment.id);
+  res.json({ payment: publicPayment(updated) });
+});
+
 app.post('/api/admin/payments/:id/fine', requireActiveAdmin, (req, res) => {
   const { amount, reason } = req.body || {};
   const fine = Number(amount);
@@ -359,11 +631,7 @@ app.post('/api/admin/payments/:id/fine', requireActiveAdmin, (req, res) => {
 // an amount and a payment deadline. A member marks the payment as made and the
 // admin approves it, mirroring the monthly payment flow.
 
-const parseDeadline = (v) => {
-  if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return null;
-  const d = new Date(`${v}T00:00:00Z`);
-  return Number.isNaN(d.getTime()) ? null : v;
-};
+const parseDeadline = (v) => parseDateOnly(v);
 
 const mineContribution = (c, row) => ({
   state: row ? row.status : 'unpaid',
@@ -547,10 +815,79 @@ app.post('/api/admin/contributions/:id/payments/:pid/reset', requireActiveAdmin,
   res.json({ ok: true });
 });
 
+app.get('/api/admin/sms/status', requireActiveAdmin, (req, res) => {
+  const config = smsConfig();
+  res.json({
+    provider: "Africa's Talking",
+    configured: smsConfigured(),
+    environment: config.environment,
+    sender_id: config.senderId || null,
+    reminder_days: SMS_REMINDER_DAYS,
+    next_reminder_date: addDays(kenyaDate(), SMS_REMINDER_DAYS),
+  });
+});
+
+app.get('/api/admin/sms/reminders', requireActiveAdmin, (req, res) => {
+  const rows = db
+    .prepare(
+      `SELECT r.*, m.display_name
+       FROM sms_reminders r
+       JOIN members m ON m.id = r.member_id
+       ORDER BY r.id DESC
+       LIMIT 100`
+    )
+    .all();
+  res.json({ reminders: rows });
+});
+
+app.post('/api/admin/sms/send', requireActiveAdmin, async (req, res) => {
+  if (!smsConfigured()) {
+    return res.status(400).json({ error: 'Configure Africa’s Talking credentials before sending reminders' });
+  }
+  try {
+    res.json(await runSmsReminders());
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'Could not run SMS reminders' });
+  }
+});
+
+const updateSmsDelivery = (body) => {
+  const payload = body || {};
+  const messageId = String(payload.messageId || payload.message_id || payload.id || '').trim();
+  if (!messageId) return { ok: true, matched: false };
+  const rawStatus = String(payload.status || payload.deliveryStatus || '').trim();
+  const statusCode = Number(payload.statusCode || payload.status_code || 0);
+  let status = 'sent';
+  if (statusCode >= 400 || /failed|rejected|undeliver|error/i.test(rawStatus)) {
+    status = 'failed';
+  } else if (/delivered|success/i.test(rawStatus)) {
+    status = 'delivered';
+  } else if (/queued|pending/i.test(rawStatus)) {
+    status = 'queued';
+  }
+  const error =
+    status === 'failed' ? String(payload.failureReason || payload.failure_reason || 'Delivery failed') : null;
+  const result = db
+    .prepare('UPDATE sms_reminders SET status = ?, error = ? WHERE provider_id = ?')
+    .run(status, error, messageId);
+  return { ok: true, matched: result.changes > 0 };
+};
+
+const smsCallbackAuthorized = (req) => {
+  const expected = process.env.AFRICASTALKING_CALLBACK_TOKEN || '';
+  if (!expected) return smsConfig().environment !== 'live';
+  return req.get('x-callback-token') === expected || req.query.token === expected;
+};
+
+app.post('/api/sms/delivery', (req, res) => {
+  if (!smsCallbackAuthorized(req)) return res.status(401).json({ error: 'Invalid callback token' });
+  res.json(updateSmsDelivery(req.body));
+});
+
 // ---- Admin: member management ----
 
 app.post('/api/admin/members', requireActiveAdmin, (req, res) => {
-  const { username, password, display_name, bio, role, designation } = req.body || {};
+  const { username, password, display_name, bio, phone, role, designation } = req.body || {};
   if (!username || !password || !display_name) {
     return res.status(400).json({ error: 'Username, password and display name are required' });
   }
@@ -566,12 +903,24 @@ app.post('/api/admin/members', requireActiveAdmin, (req, res) => {
 
   const targetRole = role === 'admin' ? 'admin' : 'member';
   const targetDesignation = DESIGNATIONS.includes(designation) ? designation : '';
+  const normalizedPhone = normalizeKenyanPhone(phone);
+  if (normalizedPhone === null) {
+    return res.status(400).json({ error: 'Enter a valid Kenyan mobile number, e.g. 0712345678' });
+  }
   const hash = bcrypt.hashSync(String(password), 10);
   const info = db
     .prepare(
-      'INSERT INTO members (username, password_hash, display_name, bio, role, designation) VALUES (?, ?, ?, ?, ?, ?)'
+      'INSERT INTO members (username, password_hash, display_name, bio, phone, role, designation) VALUES (?, ?, ?, ?, ?, ?, ?)'
     )
-    .run(name, hash, String(display_name).trim(), String(bio || '').trim(), targetRole, targetDesignation);
+    .run(
+      name,
+      hash,
+      String(display_name).trim(),
+      String(bio || '').trim(),
+      normalizedPhone,
+      targetRole,
+      targetDesignation
+    );
 
   ensureCurrentPayment(info.lastInsertRowid);
   const member = db.prepare('SELECT * FROM members WHERE id = ?').get(info.lastInsertRowid);
@@ -589,6 +938,18 @@ app.patch('/api/admin/members/:id/role', requireActiveAdmin, (req, res) => {
     return res.status(400).json({ error: 'You cannot demote yourself' });
   }
   db.prepare('UPDATE members SET role = ? WHERE id = ?').run(role, target.id);
+  const updated = db.prepare('SELECT * FROM members WHERE id = ?').get(target.id);
+  res.json({ member: publicMember(updated) });
+});
+
+app.patch('/api/admin/members/:id/phone', requireActiveAdmin, (req, res) => {
+  const target = db.prepare('SELECT * FROM members WHERE id = ?').get(req.params.id);
+  if (!target) return res.status(404).json({ error: 'Member not found' });
+  const normalized = normalizeKenyanPhone(req.body?.phone);
+  if (normalized === null) {
+    return res.status(400).json({ error: 'Enter a valid Kenyan mobile number, e.g. 0712345678' });
+  }
+  db.prepare('UPDATE members SET phone = ? WHERE id = ?').run(normalized, target.id);
   const updated = db.prepare('SELECT * FROM members WHERE id = ?').get(target.id);
   res.json({ member: publicMember(updated) });
 });
@@ -660,5 +1021,7 @@ app.use((err, req, res, next) => {
   console.error(err);
   res.status(500).json({ error: err.message || 'Server error' });
 });
+
+startSmsReminderScheduler();
 
 app.listen(PORT, () => console.log(`API server listening on http://localhost:${PORT}`));

@@ -62,6 +62,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ amount, reason }),
     }),
+  setPaymentDueDate: (id, dueDate) =>
+    request(`/admin/payments/${id}/due-date`, {
+      method: 'PATCH',
+      body: JSON.stringify({ due_date: dueDate }),
+    }),
 
   contributions: () => request('/contributions'),
   payContribution: (id) => request(`/contributions/${id}/pay`, { method: 'POST' }),
@@ -80,6 +85,9 @@ export const api = {
   settings: () => request('/admin/settings'),
   saveSettings: (data) =>
     request('/admin/settings', { method: 'PUT', body: JSON.stringify(data) }),
+  smsStatus: () => request('/admin/sms/status'),
+  smsReminders: () => request('/admin/sms/reminders'),
+  sendSmsReminders: () => request('/admin/sms/send', { method: 'POST' }),
 
   createMember: (data) => request('/admin/members', { method: 'POST', body: JSON.stringify(data) }),
   setRole: (id, role) =>
@@ -88,6 +96,11 @@ export const api = {
     request(`/admin/members/${id}/designation`, {
       method: 'PATCH',
       body: JSON.stringify({ designation }),
+    }),
+  setMemberPhone: (id, phone) =>
+    request(`/admin/members/${id}/phone`, {
+      method: 'PATCH',
+      body: JSON.stringify({ phone }),
     }),
   setMemberStatus: (id, status) =>
     request(`/admin/members/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),

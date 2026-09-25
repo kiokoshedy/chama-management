@@ -17,6 +17,7 @@ db.exec(`
     password_hash TEXT NOT NULL,
     display_name TEXT NOT NULL,
     bio TEXT DEFAULT '',
+    phone TEXT NOT NULL DEFAULT '',
     role TEXT NOT NULL DEFAULT 'member',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
@@ -32,6 +33,7 @@ db.exec(`
     period TEXT NOT NULL,
     amount REAL NOT NULL DEFAULT 0,
     fine REAL NOT NULL DEFAULT 0,
+    due_date TEXT,
     status TEXT NOT NULL DEFAULT 'unpaid',
     paid_at TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -59,6 +61,21 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(contribution_id, member_id)
   );
+
+  CREATE TABLE IF NOT EXISTS sms_reminders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    reminder_key TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL,
+    payment_id INTEGER REFERENCES payments(id) ON DELETE CASCADE,
+    contribution_id INTEGER REFERENCES contributions(id) ON DELETE CASCADE,
+    member_id INTEGER NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+    phone TEXT NOT NULL,
+    message TEXT NOT NULL,
+    provider_id TEXT,
+    status TEXT NOT NULL DEFAULT 'sending',
+    sent_at TEXT NOT NULL DEFAULT (datetime('now')),
+    error TEXT
+  );
 `);
 
 const memberColumns = db.prepare('PRAGMA table_info(members)').all();
@@ -68,10 +85,16 @@ if (!memberColumns.some((c) => c.name === 'status')) {
 if (!memberColumns.some((c) => c.name === 'designation')) {
   db.exec("ALTER TABLE members ADD COLUMN designation TEXT DEFAULT ''");
 }
+if (!memberColumns.some((c) => c.name === 'phone')) {
+  db.exec("ALTER TABLE members ADD COLUMN phone TEXT NOT NULL DEFAULT ''");
+}
 
 const paymentColumns = db.prepare('PRAGMA table_info(payments)').all();
 if (!paymentColumns.some((c) => c.name === 'fine_reason')) {
   db.exec("ALTER TABLE payments ADD COLUMN fine_reason TEXT DEFAULT ''");
+}
+if (!paymentColumns.some((c) => c.name === 'due_date')) {
+  db.exec('ALTER TABLE payments ADD COLUMN due_date TEXT');
 }
 
 export function getSetting(key, fallback = null) {

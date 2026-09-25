@@ -664,6 +664,22 @@ p {
   color: var(--amber-700);
 }
 
+.badge.status-sent,
+.badge.status-delivered {
+  background: var(--green-50);
+  color: var(--green-700);
+}
+
+.badge.status-queued {
+  background: var(--blue-50);
+  color: var(--blue-700);
+}
+
+.badge.status-failed {
+  background: var(--red-50);
+  color: var(--red-700);
+}
+
 .badge.role-suspended {
   background: var(--amber-50);
   color: var(--amber-700);
@@ -815,6 +831,121 @@ select {
 
 .input-with-icon input {
   padding-left: 40px;
+}
+
+.field-hint {
+  display: block;
+  margin-top: 5px;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.member-phone-edit {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 10px;
+  color: var(--text-3);
+}
+
+.member-phone-edit input {
+  min-width: 0;
+  padding: 7px 10px;
+  font-size: 13px;
+}
+
+.member-phone-edit svg {
+  flex-shrink: 0;
+}
+
+.sms-admin-card {
+  margin-bottom: 26px;
+}
+
+.sms-admin-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-top: 18px;
+}
+
+.sms-admin-detail {
+  display: flex;
+  gap: 8px;
+  margin-top: 5px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.sms-admin-detail strong {
+  min-width: 150px;
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.sms-history {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--border-strong);
+}
+
+.sms-history > strong {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.sms-history-row {
+  display: grid;
+  grid-template-columns: minmax(100px, 1fr) 80px 90px minmax(150px, auto);
+  align-items: center;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.sms-history-row:last-child {
+  border-bottom: none;
+}
+
+.due-date-form {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 180px;
+}
+
+.due-date-form input {
+  min-width: 140px;
+  padding: 7px 9px;
+  font-size: 13px;
+}
+
+.due-date-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-2);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.contrib-deadline-edit {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.contrib-deadline-edit input {
+  width: auto;
+  min-width: 145px;
+  padding: 7px 9px;
+  font-size: 13px;
 }
 
 /* ============================================================
@@ -1920,6 +2051,23 @@ select {
   .member-card .actions select {
     flex: 1;
   }
+
+  .sms-admin-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .sms-admin-row .btn {
+    width: 100%;
+  }
+
+  .sms-history-row {
+    grid-template-columns: 1fr auto;
+  }
+
+  .sms-history-row > span:last-child {
+    grid-column: 1 / -1;
+  }
 }
 
 @media (max-width: 520px) {
@@ -1960,6 +2108,15 @@ select {
   .fine-form .btn {
     flex: 1;
   }
+
+  .due-date-form {
+    min-width: 160px;
+    flex-wrap: wrap;
+  }
+
+  .contrib-deadline-edit {
+    flex-wrap: wrap;
+  }
 }
 
 @media (max-width: 400px) {
@@ -1993,6 +2150,19 @@ select {
   .member-card .actions select {
     width: 100%;
     flex: none;
+  }
+
+  .member-phone-edit {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .member-phone-edit input {
+    flex: 1;
+  }
+
+  .member-phone-edit .btn {
+    width: 100%;
   }
 
   .contrib-await {

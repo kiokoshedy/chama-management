@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { CalendarDays, Save, UserCircle2, Loader2, KeyRound } from 'lucide-react';
+import { CalendarDays, Save, UserCircle2, Loader2, KeyRound, Phone } from 'lucide-react';
 import { api } from '../api.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { Avatar } from '../App.jsx';
@@ -9,6 +9,7 @@ export default function Profile() {
   const [form, setForm] = useState({
     display_name: member.display_name,
     bio: member.bio,
+    phone: member.phone || '',
   });
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -95,6 +96,22 @@ export default function Profile() {
           <div className="field">
             <label htmlFor="bio">Bio</label>
             <textarea id="bio" name="bio" value={form.bio} onChange={change} rows={4} placeholder="Tell your group a little about yourself…" />
+          </div>
+          <div className="field">
+            <label htmlFor="phone">Mobile number</label>
+            <div className="input-with-icon">
+              <Phone size={16} />
+              <input
+                id="phone"
+                name="phone"
+                type="tel"
+                value={form.phone}
+                onChange={change}
+                placeholder="0712345678"
+                autoComplete="tel"
+              />
+            </div>
+            <span className="field-hint">Used for contribution reminders. Kenyan numbers are normalized automatically.</span>
           </div>
 
           {message && (

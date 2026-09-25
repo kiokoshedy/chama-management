@@ -17,7 +17,7 @@ import {
 import { api } from '../api.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { Avatar } from '../App.jsx';
-import { fmt, currency, deadlineState } from '../format.js';
+import { fmt, currency, deadlineState, todayInKenya } from '../format.js';
 
 const CONTRIB_FORM = { title: '', description: '', amount: '', deadline: '' };
 
@@ -36,6 +36,8 @@ function ContributionsAdmin() {
   const [form, setForm] = useState(CONTRIB_FORM);
   const [creating, setCreating] = useState(false);
   const [opened, setOpened] = useState(null);
+  const [deadlineDrafts, setDeadlineDrafts] = useState({});
+  const [busyDeadline, setBusyDeadline] = useState(null);
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(null);
@@ -43,6 +45,7 @@ function ContributionsAdmin() {
   const load = async () => {
     const { contributions } = await api.adminContributions();
     setContribs(contributions);
+    setDeadlineDrafts(Object.fromEntries(contributions.map((c) => [c.id, c.deadline || ''])));
   };
 
   useEffect(() => {
@@ -119,7 +122,24 @@ function ContributionsAdmin() {
     }
   };
 
-  const today = new Date().toISOString().slice(0, 10);
+  const saveDeadline = async (c) => {
+    const value = deadlineDrafts[c.id] || '';
+    if (!value) return setErr('A contribution deadline is required.');
+    setErr('');
+    setMsg('');
+    setBusyDeadline(c.id);
+    try {
+      await api.updateContribution(c.id, { deadline: value });
+      setMsg(`Deadline updated for "${c.title}".`);
+      await load();
+    } catch (e2) {
+      setErr(e2.message);
+    } finally {
+      setBusyDeadline(null);
+    }
+  };
+
+  const today = todayInKenya();
 
   return (
     <div className="card pad wide contrib-admin-root" style={{ marginBottom: 28 }}>
@@ -194,14 +214,29 @@ function ContributionsAdmin() {
                     </span>
                   </div>
                   {c.description && <p className="muted small contrib-desc">{c.description}</p>}
-                  <div className="contrib-meta">
-                    <span className="contrib-amount">{fmt(c.amount)}</span>
-                    <ContribDeadlineChip deadline={c.deadline} />
-                    <span className="muted small">
-                      {c.stats.approved} approved · {c.stats.pending} awaiting · {c.stats.members} recorded
-                    </span>
-                  </div>
-                </div>
+                   <div className="contrib-meta">
+                     <span className="contrib-amount">{fmt(c.amount)}</span>
+                     <ContribDeadlineChip deadline={c.deadline} />
+                     <span className="muted small">
+                       {c.stats.approved} approved · {c.stats.pending} awaiting · {c.stats.members} recorded
+                     </span>
+                   </div>
+                   <div className="contrib-deadline-edit">
+                     <input
+                       type="date"
+                       value={deadlineDrafts[c.id] ?? c.deadline}
+                       onChange={(e) => setDeadlineDrafts((current) => ({ ...current, [c.id]: e.target.value }))}
+                       aria-label={`Deadline for ${c.title}`}
+                     />
+                     <button
+                       className="btn ghost sm"
+                       disabled={busyDeadline === c.id}
+                       onClick={() => saveDeadline(c)}
+                     >
+                       {busyDeadline === c.id ? <Loader2 size={14} className="spin-ico" /> : 'Save deadline'}
+                     </button>
+                   </div>
+                 </div>
                 <div className="contrib-actions">
                   <button
                     className="btn ghost sm"
@@ -503,6 +538,7 @@ function MemberPayments() {
             <thead>
               <tr>
                 <th>Month</th>
+                <th>Due date</th>
                 <th>Contribution</th>
                 <th>Fine</th>
                 <th>Total</th>
@@ -515,6 +551,16 @@ function MemberPayments() {
                 <tr key={p.id}>
                   <td>
                     <span className="badge pending" style={{ textTransform: 'none' }}>{p.period}</span>
+                  </td>
+                  <td>
+                    {p.due_date ? (
+                      <span className="due-date-label">
+                        <CalendarClock size={13} />
+                        {p.due_date}
+                      </span>
+                    ) : (
+                      <span className="muted">Not set</span>
+                    )}
                   </td>
                   <td>{fmt(p.amount)}</td>
                   <td>
@@ -567,6 +613,8 @@ function MemberPayments() {
 
 function AdminPayments() {
   const [payments, setPayments] = useState([]);
+  const [dueDates, setDueDates] = useState({});
+  const [busyDueId, setBusyDueId] = useState(null);
   const [error, setError] = useState('');
   const [fines, setFines] = useState({});
   const [fineReasons, setFineReasons] = useState({});
@@ -574,6 +622,7 @@ function AdminPayments() {
   const load = async () => {
     const { payments } = await api.adminPayments();
     setPayments(payments);
+    setDueDates(Object.fromEntries(payments.map((p) => [p.id, p.due_date || ''])));
   };
 
   useEffect(() => {
@@ -609,6 +658,19 @@ function AdminPayments() {
       await load();
     } catch (e) {
       setError(e.message);
+    }
+  };
+
+  const saveDueDate = async (id) => {
+    setError('');
+    setBusyDueId(id);
+    try {
+      await api.setPaymentDueDate(id, dueDates[id] || '');
+      await load();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusyDueId(null);
     }
   };
 
@@ -694,6 +756,7 @@ function AdminPayments() {
               <tr>
                 <th>Member</th>
                 <th>Month</th>
+                <th>Due date</th>
                 <th>Contribution</th>
                 <th>Fine</th>
                 <th>Total</th>
@@ -710,6 +773,24 @@ function AdminPayments() {
                   </td>
                   <td>
                     <span className="badge pending" style={{ textTransform: 'none' }}>{p.period}</span>
+                  </td>
+                  <td>
+                    <div className="due-date-form">
+                      <input
+                        type="date"
+                        value={dueDates[p.id] ?? p.due_date ?? ''}
+                        onChange={(e) => setDueDates((current) => ({ ...current, [p.id]: e.target.value }))}
+                        aria-label={`Due date for ${p.display_name}`}
+                      />
+                      <button
+                        className="btn ghost sm"
+                        disabled={busyDueId === p.id}
+                        onClick={() => saveDueDate(p.id)}
+                      >
+                        {busyDueId === p.id ? <Loader2 size={14} className="spin-ico" /> : 'Save'}
+                      </button>
+                    </div>
+                    <span className="field-hint">Reminder is sent 5 days before.</span>
                   </td>
                   <td>{fmt(p.amount)}</td>
                   <td>

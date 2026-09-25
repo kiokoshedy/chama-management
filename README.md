@@ -4,7 +4,7 @@ A small full-stack app for a group with member accounts, roles, and an admin das
 
 ## Stack
 - **Frontend:** React 18 + Vite + react-router
-- **Backend:** Node + Express, SQLite (better-sqlite3)
+- **Backend:** Node 22.5+ + Express, SQLite (`node:sqlite`)
 - **Auth:** username + password (bcrypt-hashed), JWT sessions
 
 ## Features
@@ -37,6 +37,27 @@ A default admin account is seeded on first run:
 - password: `admin123`
 
 Change the password by editing your profile, or set `JWT_SECRET` and `PORT` in a `server/.env`.
+
+## SMS reminders
+
+Africa’s Talking sends contribution reminders 5 days before a due date. Monthly due dates are set per payment on the admin Payments page; special contributions use their deadline. Members can add or update their Kenyan mobile number from Profile, and admins can manage numbers from the Admin dashboard.
+
+Copy `server/.env.example` to `server/.env` and set these values locally:
+
+```dotenv
+AFRICASTALKING_ENV=sandbox
+AFRICASTALKING_USERNAME=your-username
+AFRICASTALKING_API_KEY=your-api-key
+AFRICASTALKING_SENDER_ID=your-registered-sender-id
+```
+
+Keep `AFRICASTALKING_ENV=sandbox` while testing. Set it to `live` only after the account, sender ID, and delivery callback have been verified. Configure the delivery callback in Africa’s Talking as:
+
+```text
+POST https://your-server.example/api/sms/delivery
+```
+
+For live mode, set `AFRICASTALKING_CALLBACK_TOKEN` and include it as the `token` query parameter when configuring the callback URL.
 
 ## Roles
 - `member` – can view directory, edit own profile
