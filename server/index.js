@@ -8,6 +8,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { db, seedAdmin, getSetting, setSetting } from './db.js';
 import { signToken, requireAuth, requireAdmin } from './auth.js';
+import { analyzeProof, cleanProofMessage, PROVIDER_LABELS, MAX_PROOF_LENGTH } from './proof.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -52,7 +53,48 @@ const publicPayment = (p) => ({
   paid_at: p.paid_at,
   display_name: p.display_name,
   username: p.username,
+  proof: proofSummary(p),
 });
+
+// ---- Payment proof ----
+// Every "I have paid" click requires the member to paste the confirmation
+// message they received (M-Pesa or Bank). The raw text is stored verbatim and
+// the parsed details are cached alongside it for the admin's review screen.
+
+function proofSummary(row) {
+  if (!row.proof_message) return null;
+  return {
+    message: row.proof_message,
+    provider: row.proof_provider || 'unknown',
+    provider_label: PROVIDER_LABELS[row.proof_provider] || PROVIDER_LABELS.unknown,
+    amount: row.proof_amount == null ? null : Number(row.proof_amount),
+    code: row.proof_code || '',
+    date: row.proof_date || null,
+    time: row.proof_time || '',
+    account: row.proof_account || '',
+    received_at: row.proof_received_at || null,
+  };
+}
+
+// Validates the pasted message and returns the parsed summary to persist.
+function readProof(value) {
+  const cleaned = cleanProofMessage(value);
+  if (!cleaned.ok) return { error: cleaned.error };
+  const parsed = analyzeProof(cleaned.text);
+  return {
+    proof: [
+      cleaned.text,
+      parsed.provider,
+      parsed.amount,
+      parsed.code,
+      parsed.date,
+      parsed.time,
+      parsed.account,
+    ],
+    parsed,
+  };
+}
+
 
 function ensureCurrentPayment(memberId) {
   const amount = Number(getSetting('monthly_amount', '0'));
@@ -506,12 +548,12 @@ app.get('/api/constitution/file', requireActiveUser, (req, res) => {
 app.post('/api/admin/constitution', requireActiveAdmin, upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Only PDF or Word documents are allowed' });
   if (req.file.size > MAX_FILE_SIZE) {
-    fs.unlink(req.file.path, () => {});
+    fs.unlink(req.file.path, () => { });
     return res.status(413).json({ error: 'File is too large (max 15 MB)' });
   }
 
   const prev = getSetting('constitution_file', '');
-  if (prev) fs.unlink(path.join(CONSTITUTION_DIR, path.basename(prev)), () => {});
+  if (prev) fs.unlink(path.join(CONSTITUTION_DIR, path.basename(prev)), () => { });
 
   setSetting('constitution_file', req.file.filename);
   setSetting('constitution_name', path.basename(req.file.originalname));
@@ -540,7 +582,14 @@ app.put('/api/admin/settings', requireActiveAdmin, (req, res) => {
 
 // ---- Payments: member side ----
 // Every member automatically has a payment for the current month based on the
-// admin-set monthly amount. Members request approval; admin approves/rejects.
+// admin-set monthly amount. Members paste their transaction confirmation and
+// request approval; admin approves/rejects.
+
+app.post('/api/proof/parse', requireActiveUser, (req, res) => {
+  const text = String(req.body?.message ?? '').trim();
+  if (!text) return res.json({ parsed: null, warnings: [], max_length: MAX_PROOF_LENGTH });
+  res.json({ ...analyzeProof(text), max_length: MAX_PROOF_LENGTH });
+});
 
 app.get('/api/payments/me', requireActiveUser, (req, res) => {
   ensureCurrentPayment(req.member.id);
@@ -559,7 +608,37 @@ app.post('/api/payments/:id/request', requireActiveUser, (req, res) => {
   if (payment.status !== 'unpaid') {
     return res.status(400).json({ error: 'This payment is not awaiting a request' });
   }
-  db.prepare("UPDATE payments SET status = 'requested' WHERE id = ?").run(payment.id);
+  const { error, proof } = readProof(req.body?.proof_message);
+  if (error) return res.status(400).json({ error });
+  db.prepare(
+    `UPDATE payments
+     SET status = 'requested',
+         proof_message = ?, proof_provider = ?, proof_amount = ?, proof_code = ?,
+         proof_date = ?, proof_time = ?, proof_account = ?, proof_received_at = datetime('now')
+     WHERE id = ?`
+  ).run(...proof, payment.id);
+  const updated = db.prepare('SELECT * FROM payments WHERE id = ?').get(payment.id);
+  res.json({ payment: publicPayment(updated) });
+});
+
+// A member can replace the message they pasted while it is still awaiting review.
+app.patch('/api/payments/:id/proof', requireActiveUser, (req, res) => {
+  const payment = db.prepare('SELECT * FROM payments WHERE id = ?').get(req.params.id);
+  if (!payment) return res.status(404).json({ error: 'Payment not found' });
+  if (payment.member_id !== req.member.id) {
+    return res.status(403).json({ error: 'This is not your payment' });
+  }
+  if (payment.status !== 'requested') {
+    return res.status(400).json({ error: 'Proof can only be changed while awaiting approval' });
+  }
+  const { error, proof } = readProof(req.body?.proof_message);
+  if (error) return res.status(400).json({ error });
+  db.prepare(
+    `UPDATE payments
+     SET proof_message = ?, proof_provider = ?, proof_amount = ?, proof_code = ?,
+         proof_date = ?, proof_time = ?, proof_account = ?, proof_received_at = datetime('now')
+     WHERE id = ?`
+  ).run(...proof, payment.id);
   const updated = db.prepare('SELECT * FROM payments WHERE id = ?').get(payment.id);
   res.json({ payment: publicPayment(updated) });
 });
@@ -595,7 +674,14 @@ app.post('/api/admin/payments/:id/reject', requireActiveAdmin, (req, res) => {
   if (payment.status !== 'requested') {
     return res.status(400).json({ error: 'Only requested payments can be rejected' });
   }
-  db.prepare("UPDATE payments SET status = 'unpaid', paid_at = NULL WHERE id = ?").run(payment.id);
+  // The pasted message is dropped so the member submits fresh proof next time.
+  db.prepare(
+    `UPDATE payments
+     SET status = 'unpaid', paid_at = NULL,
+         proof_message = '', proof_provider = '', proof_amount = NULL, proof_code = '',
+         proof_date = NULL, proof_time = '', proof_account = '', proof_received_at = NULL
+     WHERE id = ?`
+  ).run(payment.id);
   const updated = db.prepare('SELECT * FROM payments WHERE id = ?').get(payment.id);
   res.json({ payment: publicPayment(updated) });
 });
@@ -626,6 +712,200 @@ app.post('/api/admin/payments/:id/fine', requireActiveAdmin, (req, res) => {
   res.json({ payment: publicPayment(updated) });
 });
 
+// ---- Payments: month export ----
+// A single month's records as a spreadsheet-friendly CSV: one section for the
+// monthly contributions and one for any special contributions whose deadline
+// falls in that month. Admins get every member, members get only their own rows.
+
+const parsePeriod = (value) => {
+  if (typeof value !== 'string' || !/^\d{4}-(0[1-9]|1[0-2])$/.test(value)) return null;
+  return value;
+};
+
+const periodLabel = (period) => {
+  const [year, month] = period.split('-').map(Number);
+  return new Intl.DateTimeFormat('en-GB', {
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'UTC',
+  }).format(new Date(Date.UTC(year, month - 1, 1)));
+};
+
+const kenyaStamp = (date = new Date()) =>
+  `${kenyaDate(date)} ${date.toLocaleTimeString('en-GB', {
+    timeZone: 'Africa/Nairobi',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })}`;
+
+// Member names and fine reasons are free text, so quote defensively and neutralise
+// leading characters that spreadsheets would otherwise treat as a formula.
+const csvCell = (value) => {
+  if (value == null) return '';
+  let text = String(value);
+  if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+};
+
+const csvDocument = (rows) => `\uFEFF${rows.map((row) => row.map(csvCell).join(',')).join('\r\n')}\r\n`;
+
+const blankRow = (width) => new Array(width).fill('');
+
+const MONTHLY_STATUS_LABELS = {
+  paid: 'Paid',
+  requested: 'Awaiting approval',
+  unpaid: 'Not paid',
+};
+
+const CONTRIB_STATUS_LABELS = { approved: 'Approved', pending: 'Awaiting approval' };
+
+const MONTHLY_HEADER = [
+  'Member', 'Username', 'Phone', 'Contribution', 'Fine', 'Fine reason', 'Total',
+  'Status', 'Due date', 'Paid at', 'Proof from', 'Proof reference',
+  'Proof amount', 'Proof date',
+];
+
+const SPECIAL_HEADER = [
+  'Contribution', 'Deadline', 'Member', 'Username', 'Phone', 'Amount', 'Status',
+  'Paid at', 'Approved at', 'Proof from', 'Proof reference', 'Proof amount', 'Proof date',
+];
+
+const fetchMonthlyRows = (period, memberId) =>
+  db
+    .prepare(
+      `SELECT p.*, m.display_name, m.username, m.phone
+       FROM payments p JOIN members m ON m.id = p.member_id
+       WHERE p.period = ?${memberId ? ' AND p.member_id = ?' : ''}
+       ORDER BY m.display_name COLLATE NOCASE`
+    )
+    .all(...(memberId ? [period, memberId] : [period]));
+
+// Every active member gets a row, so an unpaid contribution still shows up.
+const fetchSpecialRows = (period, memberId) =>
+  db
+    .prepare(
+      `SELECT c.title, c.amount, c.deadline,
+              m.display_name, m.username, m.phone,
+              cp.status AS cp_status, cp.paid_at, cp.approved_at,
+              cp.proof_provider, cp.proof_amount, cp.proof_code, cp.proof_date
+       FROM contributions c
+       CROSS JOIN members m
+       LEFT JOIN contribution_payments cp
+         ON cp.contribution_id = c.id AND cp.member_id = m.id
+       WHERE substr(c.deadline, 1, 7) = ? AND m.status = 'active'${memberId ? ' AND m.id = ?' : ''}
+       ORDER BY c.deadline ASC, c.title COLLATE NOCASE, m.display_name COLLATE NOCASE`
+    )
+    .all(...(memberId ? [period, memberId] : [period]));
+
+function monthCsv(period, memberId) {
+  const monthly = fetchMonthlyRows(period, memberId);
+  const special = fetchSpecialRows(period, memberId);
+  const rows = [];
+
+  rows.push(['Payments report']);
+  rows.push([periodLabel(period)]);
+  rows.push([`Generated ${kenyaStamp()} (EAT)`]);
+  rows.push(blankRow(MONTHLY_HEADER.length));
+
+  // ---- Monthly contributions ----
+  const billed = monthly.reduce((sum, p) => sum + Number(p.amount) + Number(p.fine || 0), 0);
+  const collected = monthly
+    .filter((p) => p.status === 'paid')
+    .reduce((sum, p) => sum + Number(p.amount) + Number(p.fine || 0), 0);
+  const pendingCount = monthly.filter((p) => p.status === 'requested').length;
+  const unpaidCount = monthly.filter((p) => p.status === 'unpaid').length;
+
+  rows.push(['Monthly contributions']);
+  rows.push(['Members', String(monthly.length)]);
+  rows.push(['Billed', billed]);
+  rows.push(['Collected', collected]);
+  rows.push(['Outstanding', Number((billed - collected).toFixed(2))]);
+  rows.push(['Awaiting approval', String(pendingCount)]);
+  rows.push(['Not paid', String(unpaidCount)]);
+  rows.push(blankRow(MONTHLY_HEADER.length));
+  rows.push(MONTHLY_HEADER);
+  for (const p of monthly) {
+    rows.push([
+      p.display_name,
+      p.username,
+      p.phone || '',
+      Number(p.amount),
+      Number(p.fine || 0),
+      p.fine_reason || '',
+      Number(p.amount) + Number(p.fine || 0),
+      MONTHLY_STATUS_LABELS[p.status] || p.status,
+      p.due_date || '',
+      p.paid_at || '',
+      p.proof_provider ? PROVIDER_LABELS[p.proof_provider] || p.proof_provider : '',
+      p.proof_code || '',
+      p.proof_amount == null ? '' : Number(p.proof_amount),
+      p.proof_date || '',
+    ]);
+  }
+  rows.push(['Total collected', '', '', '', '', '', collected, '', '', '', '', '', '', '']);
+  rows.push(blankRow(MONTHLY_HEADER.length));
+
+  // ---- Special contributions due this month ----
+  const titles = [...new Set(special.map((s) => s.title))];
+  const approvedTotal = special
+    .filter((s) => s.cp_status === 'approved')
+    .reduce((sum, s) => sum + Number(s.amount), 0);
+
+  rows.push(['Special contributions due this month']);
+  if (titles.length === 0) {
+    rows.push(['None due this month']);
+  } else {
+    rows.push(['Collections', String(titles.length)]);
+    rows.push(['Approved total', approvedTotal]);
+    rows.push(blankRow(SPECIAL_HEADER.length));
+    rows.push(SPECIAL_HEADER);
+    for (const s of special) {
+      rows.push([
+        s.title,
+        s.deadline,
+        s.display_name,
+        s.username,
+        s.phone || '',
+        Number(s.amount),
+        (s.cp_status && CONTRIB_STATUS_LABELS[s.cp_status]) || 'Not paid',
+        s.paid_at || '',
+        s.approved_at || '',
+        s.proof_provider ? PROVIDER_LABELS[s.proof_provider] || s.proof_provider : '',
+        s.proof_code || '',
+        s.proof_amount == null ? '' : Number(s.proof_amount),
+        s.proof_date || '',
+      ]);
+    }
+    rows.push([
+      'Total approved', '', '', '', '', approvedTotal, '', '', '', '', '', '', '',
+    ]);
+  }
+
+  return csvDocument(rows);
+}
+
+function sendMonthCsv(res, period, memberId, filename) {
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.setHeader('Cache-Control', 'no-store');
+  res.send(monthCsv(period, memberId));
+}
+
+app.get('/api/admin/payments/export', requireActiveAdmin, (req, res) => {
+  const period = parsePeriod(req.query.period);
+  if (!period) return res.status(400).json({ error: 'Pick a month to download (YYYY-MM)' });
+  sendMonthCsv(res, period, null, `payments-${period}.csv`);
+});
+
+app.get('/api/payments/me/export', requireActiveUser, (req, res) => {
+  const period = parsePeriod(req.query.period);
+  if (!period) return res.status(400).json({ error: 'Pick a month to download (YYYY-MM)' });
+  sendMonthCsv(res, period, req.member.id, `my-payments-${period}.csv`);
+});
+
+
+
 // ---- Special contributions ----
 // One-off collections the admin creates (weddings, harambees, events…). Each has
 // an amount and a payment deadline. A member marks the payment as made and the
@@ -637,6 +917,7 @@ const mineContribution = (c, row) => ({
   state: row ? row.status : 'unpaid',
   paid_at: row ? row.paid_at : null,
   approved_at: row ? row.approved_at : null,
+  proof: row ? proofSummary(row) : null,
 });
 
 const publicContribution = (c, mine) => ({
@@ -654,7 +935,7 @@ const publicContribution = (c, mine) => ({
 app.get('/api/contributions', requireActiveUser, (req, res) => {
   const rows = db
     .prepare(
-      `SELECT c.*, cp.status AS cp_status, cp.paid_at AS cp_paid_at, cp.approved_at AS cp_approved_at
+      `SELECT c.*, cp.id AS cp_id
        FROM contributions c
        LEFT JOIN contribution_payments cp
          ON cp.contribution_id = c.id AND cp.member_id = ?
@@ -662,18 +943,19 @@ app.get('/api/contributions', requireActiveUser, (req, res) => {
        ORDER BY c.deadline ASC, c.id DESC`
     )
     .all(req.member.id);
+  const mine = db
+    .prepare('SELECT * FROM contribution_payments WHERE member_id = ?')
+    .all(req.member.id);
+  const byContribution = new Map(mine.map((row) => [row.contribution_id, row]));
   res.json({
-    contributions: rows.map((r) =>
-      publicContribution(r, {
-        state: r.cp_status || 'unpaid',
-        paid_at: r.cp_paid_at,
-        approved_at: r.cp_approved_at,
-      })
-    ),
+    contributions: rows.map((r) => {
+      const row = byContribution.get(r.id);
+      return publicContribution(r, row ? mineContribution(r, row) : { state: 'unpaid' });
+    }),
   });
 });
 
-// Member marks "I have paid" -> status becomes 'pending' (awaiting approval).
+// Member pastes their confirmation, which moves the payment to 'pending'.
 app.post('/api/contributions/:id/pay', requireActiveUser, (req, res) => {
   const c = db
     .prepare('SELECT * FROM contributions WHERE id = ? AND is_active = 1')
@@ -688,12 +970,42 @@ app.post('/api/contributions/:id/pay', requireActiveUser, (req, res) => {
     }
     return res.status(400).json({ error: 'Your payment for this contribution is already approved' });
   }
+  const { error, proof } = readProof(req.body?.proof_message);
+  if (error) return res.status(400).json({ error });
   db.prepare(
-    "INSERT INTO contribution_payments (contribution_id, member_id, status, paid_at) VALUES (?, ?, 'pending', datetime('now'))"
-  ).run(c.id, req.member.id);
+    `INSERT INTO contribution_payments
+       (contribution_id, member_id, status, paid_at,
+        proof_message, proof_provider, proof_amount, proof_code,
+        proof_date, proof_time, proof_account, proof_received_at)
+     VALUES (?, ?, 'pending', datetime('now'), ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+  ).run(c.id, req.member.id, ...proof);
   const cp = db
     .prepare('SELECT * FROM contribution_payments WHERE contribution_id = ? AND member_id = ?')
     .get(c.id, req.member.id);
+  res.json({ ok: true, contribution: publicContribution(c, mineContribution(c, cp)) });
+});
+
+// Replace the pasted message while it is still awaiting approval.
+app.patch('/api/contributions/:id/proof', requireActiveUser, (req, res) => {
+  const c = db
+    .prepare('SELECT * FROM contributions WHERE id = ? AND is_active = 1')
+    .get(req.params.id);
+  if (!c) return res.status(404).json({ error: 'Contribution not found' });
+  const row = db
+    .prepare('SELECT * FROM contribution_payments WHERE contribution_id = ? AND member_id = ?')
+    .get(c.id, req.member.id);
+  if (!row || row.status !== 'pending') {
+    return res.status(400).json({ error: 'There is no pending payment to update' });
+  }
+  const { error, proof } = readProof(req.body?.proof_message);
+  if (error) return res.status(400).json({ error });
+  db.prepare(
+    `UPDATE contribution_payments
+     SET proof_message = ?, proof_provider = ?, proof_amount = ?, proof_code = ?,
+         proof_date = ?, proof_time = ?, proof_account = ?, proof_received_at = datetime('now')
+     WHERE id = ?`
+  ).run(...proof, row.id);
+  const cp = db.prepare('SELECT * FROM contribution_payments WHERE id = ?').get(row.id);
   res.json({ ok: true, contribution: publicContribution(c, mineContribution(c, cp)) });
 });
 
@@ -731,6 +1043,7 @@ app.get('/api/admin/contributions', requireActiveAdmin, (req, res) => {
           status: p.status,
           paid_at: p.paid_at,
           approved_at: p.approved_at,
+          proof: proofSummary(p),
         })),
         stats: {
           pending: pays.filter((p) => p.status === 'pending').length,

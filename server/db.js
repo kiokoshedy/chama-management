@@ -97,6 +97,31 @@ if (!paymentColumns.some((c) => c.name === 'due_date')) {
   db.exec('ALTER TABLE payments ADD COLUMN due_date TEXT');
 }
 
+// ---- Payment proof ----
+// Members paste the M-Pesa or bank confirmation message they received. The raw
+// text is always stored verbatim; the parsed columns are a best-effort summary
+// so an admin can verify without re-reading every message by eye.
+
+const PROOF_COLUMNS = [
+  ["proof_message", "TEXT NOT NULL DEFAULT ''"],
+  ['proof_provider', "TEXT NOT NULL DEFAULT ''"],
+  ['proof_amount', 'REAL'],
+  ["proof_code", "TEXT NOT NULL DEFAULT ''"],
+  ['proof_date', 'TEXT'],
+  ["proof_time", "TEXT NOT NULL DEFAULT ''"],
+  ["proof_account", "TEXT NOT NULL DEFAULT ''"],
+  ['proof_received_at', 'TEXT'],
+];
+
+for (const table of ['payments', 'contribution_payments']) {
+  const existing = db.prepare(`PRAGMA table_info(${table})`).all();
+  for (const [name, definition] of PROOF_COLUMNS) {
+    if (!existing.some((c) => c.name === name)) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
+    }
+  }
+}
+
 export function getSetting(key, fallback = null) {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
   return row ? row.value : fallback;

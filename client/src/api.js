@@ -15,6 +15,21 @@ async function request(path, options = {}) {
   return body;
 }
 
+// Streams a file the API returns as an attachment and hands it to the browser.
+async function download(path) {
+  const token = localStorage.getItem('token');
+  const res = await fetch(`${API}${path}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `Download failed (${res.status})`);
+  }
+  const disposition = res.headers.get('Content-Disposition') || '';
+  const filename = disposition.match(/filename="([^"]+)"/)?.[1] || 'download';
+  return { blob: await res.blob(), filename };
+}
+
 export const api = {
   login: (data) => request('/auth/login', { method: 'POST', body: JSON.stringify(data) }),
   me: () => request('/auth/me'),
@@ -51,8 +66,14 @@ export const api = {
     return body;
   },
 
+  parseProof: (message) =>
+    request('/proof/parse', { method: 'POST', body: JSON.stringify({ message }) }),
+
   paymentsMe: () => request('/payments/me'),
-  requestPayment: (id) => request(`/payments/${id}/request`, { method: 'POST' }),
+  requestPayment: (id, proofMessage) =>
+    request(`/payments/${id}/request`, { method: 'POST', body: JSON.stringify({ proof_message: proofMessage }) }),
+  updatePaymentProof: (id, proofMessage) =>
+    request(`/payments/${id}/proof`, { method: 'PATCH', body: JSON.stringify({ proof_message: proofMessage }) }),
 
   adminPayments: () => request('/admin/payments'),
   approvePayment: (id) => request(`/admin/payments/${id}/approve`, { method: 'POST' }),
@@ -67,10 +88,15 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ due_date: dueDate }),
     }),
+  exportMonth: (period) => download(`/admin/payments/export?period=${encodeURIComponent(period)}`),
+  exportMyMonth: (period) => download(`/payments/me/export?period=${encodeURIComponent(period)}`),
 
   contributions: () => request('/contributions'),
-  payContribution: (id) => request(`/contributions/${id}/pay`, { method: 'POST' }),
+  payContribution: (id, proofMessage) =>
+    request(`/contributions/${id}/pay`, { method: 'POST', body: JSON.stringify({ proof_message: proofMessage }) }),
   cancelContribution: (id) => request(`/contributions/${id}/cancel`, { method: 'POST' }),
+  updateContributionProof: (id, proofMessage) =>
+    request(`/contributions/${id}/proof`, { method: 'PATCH', body: JSON.stringify({ proof_message: proofMessage }) }),
 
   adminContributions: () => request('/admin/contributions'),
   createContribution: (data) =>

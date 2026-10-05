@@ -13,10 +13,14 @@ import {
   ChevronUp,
   Plus,
   ShieldCheck,
+  ReceiptText,
+  Pencil,
 } from 'lucide-react';
 import { api } from '../api.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { Avatar } from '../App.jsx';
+import { ProofDialog, ProofViewer } from '../ProofDialog.jsx';
+import MonthExport from '../MonthExport.jsx';
 import { fmt, currency, deadlineState, todayInKenya } from '../format.js';
 
 const CONTRIB_FORM = { title: '', description: '', amount: '', deadline: '' };
@@ -41,6 +45,7 @@ function ContributionsAdmin() {
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(null);
+  const [proofView, setProofView] = useState(null);
 
   const load = async () => {
     const { contributions } = await api.adminContributions();
@@ -214,29 +219,29 @@ function ContributionsAdmin() {
                     </span>
                   </div>
                   {c.description && <p className="muted small contrib-desc">{c.description}</p>}
-                   <div className="contrib-meta">
-                     <span className="contrib-amount">{fmt(c.amount)}</span>
-                     <ContribDeadlineChip deadline={c.deadline} />
-                     <span className="muted small">
-                       {c.stats.approved} approved · {c.stats.pending} awaiting · {c.stats.members} recorded
-                     </span>
-                   </div>
-                   <div className="contrib-deadline-edit">
-                     <input
-                       type="date"
-                       value={deadlineDrafts[c.id] ?? c.deadline}
-                       onChange={(e) => setDeadlineDrafts((current) => ({ ...current, [c.id]: e.target.value }))}
-                       aria-label={`Deadline for ${c.title}`}
-                     />
-                     <button
-                       className="btn ghost sm"
-                       disabled={busyDeadline === c.id}
-                       onClick={() => saveDeadline(c)}
-                     >
-                       {busyDeadline === c.id ? <Loader2 size={14} className="spin-ico" /> : 'Save deadline'}
-                     </button>
-                   </div>
-                 </div>
+                  <div className="contrib-meta">
+                    <span className="contrib-amount">{fmt(c.amount)}</span>
+                    <ContribDeadlineChip deadline={c.deadline} />
+                    <span className="muted small">
+                      {c.stats.approved} approved · {c.stats.pending} awaiting · {c.stats.members} recorded
+                    </span>
+                  </div>
+                  <div className="contrib-deadline-edit">
+                    <input
+                      type="date"
+                      value={deadlineDrafts[c.id] ?? c.deadline}
+                      onChange={(e) => setDeadlineDrafts((current) => ({ ...current, [c.id]: e.target.value }))}
+                      aria-label={`Deadline for ${c.title}`}
+                    />
+                    <button
+                      className="btn ghost sm"
+                      disabled={busyDeadline === c.id}
+                      onClick={() => saveDeadline(c)}
+                    >
+                      {busyDeadline === c.id ? <Loader2 size={14} className="spin-ico" /> : 'Save deadline'}
+                    </button>
+                  </div>
+                </div>
                 <div className="contrib-actions">
                   <button
                     className="btn ghost sm"
@@ -279,6 +284,20 @@ function ContributionsAdmin() {
                             <span className="badge status-requested">Awaiting approval</span>
                           )}
                           <div className="actions">
+                            <button
+                              className="btn ghost sm"
+                              disabled={!p.proof}
+                              title={p.proof ? 'View the payment message this member pasted' : 'No message was pasted'}
+                              onClick={() => setProofView({
+                                title: `${p.display_name}'s payment message`,
+                                subtitle: c.title,
+                                amountDue: Number(c.amount),
+                                proof: p.proof,
+                              })}
+                            >
+                              <ReceiptText size={14} />
+                              Proof
+                            </button>
                             {p.status === 'pending' && (
                               <button
                                 className="btn sm"
@@ -307,6 +326,16 @@ function ContributionsAdmin() {
           })}
         </div>
       )}
+
+      {proofView && (
+        <ProofViewer
+          title={proofView.title}
+          subtitle={proofView.subtitle}
+          amountDue={proofView.amountDue}
+          proof={proofView.proof}
+          onClose={() => setProofView(null)}
+        />
+      )}
     </div>
   );
 }
@@ -333,7 +362,7 @@ function ContribDeadline({ deadline }) {
   );
 }
 
-function MemberContribs({ contribs, busyId, onPay, onCancel }) {
+function MemberContribs({ contribs, busyId, onPay, onCancel, onEditProof, onViewProof }) {
   if (!contribs.length) return null;
   return (
     <div className="contrib-section">
@@ -360,10 +389,17 @@ function MemberContribs({ contribs, busyId, onPay, onCancel }) {
                 </span>
                 {c.mine?.state !== 'approved' && <ContribDeadline deadline={c.deadline} />}
               </div>
+              {c.mine?.proof && (
+                <div className="proof-tag">
+                  <ReceiptText size={13} />
+                  Message sent{c.mine.proof.code ? ` · Ref ${c.mine.proof.code}` : ''}
+                  {c.mine.proof.amount != null && <> · {fmt(c.mine.proof.amount)}</>}
+                </div>
+              )}
             </div>
             <div className="contrib-actions">
               {c.mine?.state === 'unpaid' && (
-                <button className="btn sm" disabled={busyId === c.id} onClick={() => onPay(c.id)}>
+                <button className="btn sm" disabled={busyId === c.id} onClick={() => onPay(c)}>
                   {busyId === c.id ? (
                     <Loader2 size={14} className="spin-ico" style={{ position: 'static' }} />
                   ) : (
@@ -375,6 +411,14 @@ function MemberContribs({ contribs, busyId, onPay, onCancel }) {
               {c.mine?.state === 'pending' && (
                 <div className="contrib-await">
                   <span className="muted small">Awaiting approval</span>
+                  <button className="btn sm ghost" onClick={() => onViewProof(c)} title="View the message you sent">
+                    <ReceiptText size={14} />
+                    View
+                  </button>
+                  <button className="btn sm ghost" onClick={() => onEditProof(c)} title="Paste a different message">
+                    <Pencil size={14} />
+                    Change
+                  </button>
                   <button className="btn sm ghost" disabled={busyId === c.id} onClick={() => onCancel(c.id)}>
                     <Undo2 size={14} />
                     Undo
@@ -407,6 +451,10 @@ function MemberPayments() {
   const [contribs, setContribs] = useState([]);
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState(null);
+  const [proofForm, setProofForm] = useState(null);
+  const [proofError, setProofError] = useState('');
+  const [proofBusy, setProofBusy] = useState(false);
+  const [proofView, setProofView] = useState(null);
 
   const load = async () => {
     const [{ payments }, { contributions }] = await Promise.all([
@@ -421,30 +469,69 @@ function MemberPayments() {
     load().catch((e) => setError(e.message));
   }, []);
 
-  const requestPaid = async (id) => {
+  // ---- Monthly contributions ----
+
+  const askMonthlyProof = (payment, mode = 'request') => {
     setError('');
-    setBusyId(id);
+    setProofError('');
+    setProofForm({
+      kind: 'monthly',
+      mode,
+      id: payment.id,
+      amountDue: payment.total,
+      title: mode === 'request' ? `Monthly contribution · ${payment.period}` : 'Change your payment message',
+      subtitle:
+        mode === 'request'
+          ? 'Paste the confirmation message from M-Pesa or your bank so the admin can verify it.'
+          : 'Paste the confirmation message again — this replaces the one the admin has.',
+      initialMessage: payment.proof?.message || '',
+    });
+  };
+
+  // ---- Special contributions ----
+
+  const askContribProof = (contribution, mode = 'pay') => {
+    setError('');
+    setProofError('');
+    setProofForm({
+      kind: 'contribution',
+      mode,
+      id: contribution.id,
+      amountDue: Number(contribution.amount),
+      title: mode === 'pay' ? contribution.title : `Change message · ${contribution.title}`,
+      subtitle:
+        mode === 'pay'
+          ? 'Paste the confirmation message from M-Pesa or your bank so the admin can verify it.'
+          : 'Paste the confirmation message again — this replaces the one the admin has.',
+      initialMessage: contribution.mine?.proof?.message || '',
+    });
+  };
+
+  const submitProof = async (message) => {
+    setProofBusy(true);
+    setProofError('');
     try {
-      await api.requestPayment(id);
+      const { kind, mode, id } = proofForm;
+      if (kind === 'monthly') {
+        if (mode === 'request') await api.requestPayment(id, message);
+        else await api.updatePaymentProof(id, message);
+      } else if (mode === 'pay') {
+        await api.payContribution(id, message);
+      } else {
+        await api.updateContributionProof(id, message);
+      }
+      setProofForm(null);
       await load();
     } catch (e) {
-      setError(e.message);
+      setProofError(e.message);
     } finally {
-      setBusyId(null);
+      setProofBusy(false);
     }
   };
 
-  const pay = async (id) => {
-    setError('');
-    setBusyId(id);
-    try {
-      await api.payContribution(id);
-      await load();
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setBusyId(null);
-    }
+  const closeProof = () => {
+    setProofForm(null);
+    setProofError('');
   };
 
   const cancel = async (id) => {
@@ -470,8 +557,8 @@ function MemberPayments() {
         <div>
           <h1>My payments</h1>
           <p className="page-sub">
-            Welcome, {member.display_name}. Tap "I have paid" once you make your contribution — the
-            admin will approve it.
+            Welcome, {member.display_name}. Once you have paid, tap "I have paid" and paste the
+            M-Pesa or Bank confirmation message — the admin checks it before approving.
           </p>
         </div>
       </div>
@@ -515,7 +602,21 @@ function MemberPayments() {
 
       {error && <p className="error">{error}</p>}
 
-      <MemberContribs contribs={contribs} busyId={busyId} onPay={pay} onCancel={cancel} />
+      <MemberContribs
+        contribs={contribs}
+        busyId={busyId}
+        onPay={askContribProof}
+        onCancel={cancel}
+        onEditProof={(c) => askContribProof(c, 'proof')}
+        onViewProof={(c) =>
+          setProofView({
+            title: c.title,
+            subtitle: 'The message you sent to the admin',
+            amountDue: Number(c.amount),
+            proof: c.mine.proof,
+          })
+        }
+      />
 
       <div className="section-head" style={{ marginTop: contribs.length ? 30 : 0 }}>
         <div>
@@ -523,6 +624,12 @@ function MemberPayments() {
           <p className="muted small">Your recurring monthly contribution history.</p>
         </div>
       </div>
+
+      <MonthExport
+        periods={[...new Set(payments.map((p) => p.period))]}
+        onDownload={api.exportMyMonth}
+        label="Download my record"
+      />
 
       {payments.length === 0 && !error ? (
         <div className="empty-state">
@@ -578,34 +685,69 @@ function MemberPayments() {
                   </td>
                   <td>{statusBadge(p.status)}</td>
                   <td>
-                    {p.status === 'unpaid' && (
-                      <button
-                        className="btn subtle sm"
-                        disabled={busyId === p.id}
-                        onClick={() => requestPaid(p.id)}
-                      >
-                        {busyId === p.id ? (
-                          <Loader2 size={14} className="spinner" style={{ position: 'static', borderColor: 'rgba(79,70,229,.3)', borderTopColor: '#4f46e5' }} />
-                        ) : (
+                    {p.proof && (
+                      <div className="proof-tag">
+                        <ReceiptText size={13} />
+                        Message sent
+                        {p.proof.amount != null && <> · {fmt(p.proof.amount)}</>}
+                        {p.proof.code && <> · Ref {p.proof.code}</>}
+                      </div>
+                    )}
+                    <div className="actions">
+                      {p.status === 'unpaid' && (
+                        <button className="btn subtle sm" onClick={() => askMonthlyProof(p)}>
                           <BadgeCheck size={14} />
-                        )}
-                        I have paid
-                      </button>
-                    )}
-                    {p.status === 'requested' && (
-                      <span className="muted small">Awaiting approval</span>
-                    )}
-                    {p.status === 'paid' && (
-                      <span className="muted small" style={{ color: 'var(--green-700)', fontWeight: 600 }}>
-                        <CheckCircle2 size={14} style={{ verticalAlign: 'text-bottom' }} /> Recorded
-                      </span>
-                    )}
+                          I have paid
+                        </button>
+                      )}
+                      {p.status === 'requested' && (
+                        <>
+                          <span className="muted small">Awaiting approval</span>
+                          <button
+                            className="btn sm ghost"
+                            onClick={() => askMonthlyProof(p, 'proof')}
+                            title="Paste a different message"
+                          >
+                            <Pencil size={14} />
+                            Change message
+                          </button>
+                        </>
+                      )}
+                      {p.status === 'paid' && (
+                        <span className="muted small" style={{ color: 'var(--green-700)', fontWeight: 600 }}>
+                          <CheckCircle2 size={14} style={{ verticalAlign: 'text-bottom' }} /> Recorded
+                        </span>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+      )}
+
+      {proofForm && (
+        <ProofDialog
+          title={proofForm.title}
+          subtitle={proofForm.subtitle}
+          amountDue={proofForm.amountDue}
+          initialMessage={proofForm.initialMessage}
+          busy={proofBusy}
+          error={proofError}
+          onCancel={closeProof}
+          onSubmit={submitProof}
+        />
+      )}
+
+      {proofView && (
+        <ProofViewer
+          title={proofView.title}
+          subtitle={proofView.subtitle}
+          amountDue={proofView.amountDue}
+          proof={proofView.proof}
+          onClose={() => setProofView(null)}
+        />
       )}
     </div>
   );
@@ -618,6 +760,7 @@ function AdminPayments() {
   const [error, setError] = useState('');
   const [fines, setFines] = useState({});
   const [fineReasons, setFineReasons] = useState({});
+  const [proofView, setProofView] = useState(null);
 
   const load = async () => {
     const { payments } = await api.adminPayments();
@@ -741,6 +884,8 @@ function AdminPayments() {
 
       {error && <p className="error">{error}</p>}
 
+      <MonthExport periods={periods} onDownload={api.exportMonth} />
+
       {payments.length === 0 && !error ? (
         <div className="empty-state">
           <div className="icon-tile">
@@ -809,6 +954,22 @@ function AdminPayments() {
                   <td>{statusBadge(p.status)}</td>
                   <td>
                     <div className="actions">
+                      {p.proof && (
+                        <button
+                          className="btn ghost sm"
+                          onClick={() =>
+                            setProofView({
+                              title: `${p.display_name} · ${p.period}`,
+                              subtitle: 'Payment message pasted by the member',
+                              amountDue: p.total,
+                              proof: p.proof,
+                            })
+                          }
+                        >
+                          <ReceiptText size={14} />
+                          Proof
+                        </button>
+                      )}
                       {p.status !== 'paid' && (
                         <button className="btn sm" title="Mark as paid" onClick={() => approve(p.id)}>
                           Approve
@@ -862,6 +1023,16 @@ function AdminPayments() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {proofView && (
+        <ProofViewer
+          title={proofView.title}
+          subtitle={proofView.subtitle}
+          amountDue={proofView.amountDue}
+          proof={proofView.proof}
+          onClose={() => setProofView(null)}
+        />
       )}
     </div>
   );
