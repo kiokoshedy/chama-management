@@ -1576,7 +1576,7 @@ select {
 
 .blocked-card {
   width: 100%;
-  max-width: 420px;
+  max-width: 460px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -1627,6 +1627,233 @@ select {
 
 .blocked-meta strong {
   font-size: 14px;
+}
+
+/* ============================================================
+   Appeals — member appeal panel + admin review
+   ============================================================ */
+
+.icon-tile.red {
+  background: var(--red-50);
+  color: var(--red-600);
+}
+
+.badge.approved {
+  background: var(--green-50);
+  color: var(--green-700);
+}
+
+.badge.declined {
+  background: var(--red-50);
+  color: var(--red-700);
+}
+
+.member-status-reason {
+  display: flex;
+  gap: 6px;
+  margin: 10px 0 0;
+  padding: 9px 11px;
+  border-radius: var(--radius-sm);
+  background: var(--red-50);
+  color: var(--red-700);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.member-status-reason svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.appeal-panel {
+  width: 100%;
+  text-align: left;
+  margin-bottom: 18px;
+}
+
+.appeal-reason {
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  background: var(--amber-50);
+  border: 1px solid rgba(217, 119, 6, 0.25);
+  margin-bottom: 14px;
+}
+
+.appeal-reason.expelled {
+  background: var(--red-50);
+  border-color: rgba(217, 45, 32, 0.25);
+}
+
+.appeal-reason-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--amber-700);
+  margin-bottom: 6px;
+}
+
+.appeal-reason.expelled .appeal-reason-head {
+  color: var(--red-700);
+}
+
+.appeal-reason p {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-2);
+  line-height: 1.5;
+}
+
+.appeal-history {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.appeal-entry {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.appeal-entry.pending {
+  background: var(--amber-50);
+  border-color: rgba(217, 119, 6, 0.3);
+}
+
+.appeal-entry-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.appeal-entry-message {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.appeal-entry-response {
+  display: flex;
+  gap: 7px;
+  margin: 10px 0 0;
+  font-size: 13.5px;
+  color: var(--text-2);
+  line-height: 1.5;
+}
+
+.appeal-entry-response svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.appeal-note {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 0 0 16px;
+  font-size: 13.5px;
+  color: var(--text-3);
+  text-align: center;
+}
+
+.appeal-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.appeal-form-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.appeal-notice {
+  margin: 0;
+  color: var(--green-700);
+  font-size: 14px;
+}
+
+.appeal-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.appeal-row {
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.appeal-row.pending {
+  border-color: rgba(217, 119, 6, 0.3);
+}
+
+.appeal-row-head {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin-bottom: 10px;
+}
+
+.appeal-row-who {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.3;
+  flex: 1;
+  min-width: 0;
+}
+
+.appeal-row-who strong {
+  font-size: 14px;
+}
+
+.appeal-row-head .badge {
+  margin-left: auto;
+}
+
+.appeal-message {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.appeal-row-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+
+.appeal-response {
+  display: flex;
+  gap: 7px;
+  margin: 10px 0 0;
+  font-size: 13.5px;
+  color: var(--text-2);
+  line-height: 1.5;
+}
+
+.appeal-response svg {
+  flex-shrink: 0;
+  margin-top: 2px;
 }
 
 /* ============================================================
@@ -1917,7 +2144,7 @@ select {
   grid-template-columns: 1.4fr 1fr 1fr;
   grid-template-areas:
     'title title deadline'
-    'desc desc desc'
+    'desc desc amount'
     'submit submit submit';
   gap: 12px 14px;
   align-items: end;

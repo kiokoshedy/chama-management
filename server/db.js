@@ -76,6 +76,17 @@ db.exec(`
     sent_at TEXT NOT NULL DEFAULT (datetime('now')),
     error TEXT
   );
+
+  CREATE TABLE IF NOT EXISTS appeals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    member_id INTEGER NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+    message TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    response TEXT NOT NULL DEFAULT '',
+    decided_by INTEGER REFERENCES members(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    decided_at TEXT
+  );
 `);
 
 const memberColumns = db.prepare('PRAGMA table_info(members)').all();
@@ -87,6 +98,9 @@ if (!memberColumns.some((c) => c.name === 'designation')) {
 }
 if (!memberColumns.some((c) => c.name === 'phone')) {
   db.exec("ALTER TABLE members ADD COLUMN phone TEXT NOT NULL DEFAULT ''");
+}
+if (!memberColumns.some((c) => c.name === 'status_reason')) {
+  db.exec("ALTER TABLE members ADD COLUMN status_reason TEXT NOT NULL DEFAULT ''");
 }
 
 const paymentColumns = db.prepare('PRAGMA table_info(payments)').all();

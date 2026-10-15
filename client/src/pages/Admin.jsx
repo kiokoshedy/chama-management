@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { UserPlus, Coins, ShieldCheck, Loader2, PauseCircle, UserX, RotateCcw, KeyRound, FileText, Eye, CalendarClock, HardDrive, CloudUpload, LinkIcon, ExternalLink, UserCheck, Phone, Send } from 'lucide-react';
+import { UserPlus, Coins, ShieldCheck, Loader2, PauseCircle, UserX, RotateCcw, KeyRound, FileText, Eye, CalendarClock, HardDrive, CloudUpload, LinkIcon, ExternalLink, UserCheck, Phone, Send, X, TriangleAlert, CheckCircle2, XCircle, MessageSquareText } from 'lucide-react';
 import { api } from '../api.js';
 import { fmt, currency, fmtBytes, fmtDate } from '../format.js';
 import { Avatar } from '../App.jsx';
@@ -17,6 +17,8 @@ const emptyForm = {
 };
 
 const STATUS_LABEL = { active: 'Active', suspended: 'Suspended', expelled: 'Expelled' };
+
+const APPEAL_LABEL = { pending: 'Pending', approved: 'Approved', declined: 'Declined' };
 
 const DESIGNATIONS = [
   'Chairman',
@@ -44,19 +46,28 @@ export default function Admin() {
   const [constitution, setConstitution] = useState(null);
   const [constUrl, setConstUrl] = useState(null);
   const [constBusy, setConstBusy] = useState(false);
+  const [appeals, setAppeals] = useState([]);
+  const [statusModal, setStatusModal] = useState(null);
+  const [reason, setReason] = useState('');
+  const [appealModal, setAppealModal] = useState(null);
+  const [response, setResponse] = useState('');
+  const [modalBusy, setModalBusy] = useState(false);
 
   const load = async () => {
-    const [{ members }, { monthly_amount }, smsStatus, { reminders }] = await Promise.all([
-      api.members(),
-      api.settings(),
-      api.smsStatus(),
-      api.smsReminders(),
-    ]);
+    const [{ members }, { monthly_amount }, smsStatus, { reminders }, { appeals: appealsList }] =
+      await Promise.all([
+        api.members(),
+        api.settings(),
+        api.smsStatus(),
+        api.smsReminders(),
+        api.adminAppeals(),
+      ]);
     setMembers(members);
     setPhoneDrafts(Object.fromEntries(members.map((m) => [m.id, m.phone || ''])));
     setMonthly(monthly_amount);
     setSms(smsStatus);
     setSmsHistory(reminders);
+    setAppeals(appealsList);
     const doc = await api.constitution();
     setConstitution(doc);
     if (doc.exists) {
@@ -192,19 +203,12 @@ export default function Admin() {
     }
   };
 
-  const remove = async (id, status, name) => {
-    const action =
-      status === 'expelled'
-        ? `Expel ${name}? They will no longer access the group. This can be reversed.`
-        : status === 'suspended'
-          ? `Suspend ${name}? They will not be able to sign in until reactivated.`
-          : `Reactivate ${name}?`;
-    if (!confirm(action)) return;
+  const applyStatus = async (id, status, reasonText, name) => {
     setError('');
     setSuccess('');
     setBusyId(id);
     try {
-      const { member } = await api.setMemberStatus(id, status);
+      const { member } = await api.setMemberStatus(id, status, reasonText);
       setSuccess(
         status === 'expelled'
           ? `${member.display_name} has been expelled.`
@@ -212,6 +216,7 @@ export default function Admin() {
             ? `${member.display_name} has been suspended.`
             : `${member.display_name} has been reactivated.`
       );
+      setStatusModal(null);
       await load();
     } catch (err) {
       setError(err.message);
@@ -219,6 +224,41 @@ export default function Admin() {
       setBusyId(null);
     }
   };
+
+  const requestStatus = (id, status, name) => {
+    setError('');
+    setSuccess('');
+    if (status === 'active') {
+      if (confirm(`Reactivate ${name}? They will be able to sign in again.`)) {
+        applyStatus(id, 'active', '', name);
+      }
+      return;
+    }
+    setReason('');
+    setStatusModal({ id, status, name });
+  };
+
+  const decideAppeal = async (id, decision) => {
+    setError('');
+    setSuccess('');
+    setModalBusy(true);
+    try {
+      const { appeal } = await api.decideAppeal(id, decision, response);
+      setSuccess(
+        decision === 'approved'
+          ? `Appeal approved — ${appeal.display_name} has been reactivated.`
+          : `Appeal declined for ${appeal.display_name}.`
+      );
+      setAppealModal(null);
+      await load();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setModalBusy(false);
+    }
+  };
+
+  const pendingAppeals = appeals.filter((a) => a.status === 'pending').length;
 
   return (
     <div>
@@ -482,6 +522,81 @@ export default function Admin() {
         </div>
       </div>
 
+      <div className="card pad wide appeals-card">
+        <div className="card-title-row">
+          <span className="icon-tile amber">
+            <MessageSquareText size={18} />
+          </span>
+          <div>
+            <h2>Appeals</h2>
+            <p className="muted small">
+              Suspended or expelled members can ask for a review. Approving an appeal reactivates
+              the member.
+            </p>
+          </div>
+          {pendingAppeals > 0 && (
+            <span className="badge pending" style={{ marginLeft: 'auto' }}>
+              {pendingAppeals} pending
+            </span>
+          )}
+        </div>
+        {appeals.length === 0 ? (
+          <div className="alert info" style={{ marginBottom: 0 }}>
+            <MessageSquareText size={17} />
+            No appeals have been submitted yet.
+          </div>
+        ) : (
+          <div className="appeal-list">
+            {appeals.map((a) => (
+              <div className={`appeal-row ${a.status}`} key={a.id}>
+                <div className="appeal-row-head">
+                  <Avatar name={a.display_name} className="sm" />
+                  <div className="appeal-row-who">
+                    <strong>{a.display_name}</strong>
+                    <span className="muted small">
+                      @{a.username} · {fmtDate(a.created_at)}
+                    </span>
+                  </div>
+                  <span className={`badge ${a.status}`}>{APPEAL_LABEL[a.status]}</span>
+                </div>
+                <p className="appeal-message">{a.message}</p>
+                {a.status === 'pending' ? (
+                  <div className="appeal-row-actions">
+                    <button
+                      className="btn danger-ghost sm"
+                      onClick={() => {
+                        setResponse('');
+                        setAppealModal({ id: a.id, decision: 'declined', name: a.display_name });
+                      }}
+                    >
+                      <XCircle size={14} />
+                      Decline
+                    </button>
+                    <button
+                      className="btn sm"
+                      onClick={() => {
+                        setResponse('');
+                        setAppealModal({ id: a.id, decision: 'approved', name: a.display_name });
+                      }}
+                    >
+                      <CheckCircle2 size={14} />
+                      Approve
+                    </button>
+                  </div>
+                ) : (
+                  a.response && (
+                    <p className="appeal-response">
+                      <MessageSquareText size={13} />
+                      {a.response}
+                    </p>
+                  )
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       <h2 style={{ marginBottom: 16 }}>Manage members ({members.length})</h2>
       <div className="grid">
         {members.map((m) => (
@@ -500,6 +615,12 @@ export default function Admin() {
                 <span className={`badge role-${m.status}`}>{STATUS_LABEL[m.status]}</span>
               )}
             </div>
+            {m.status !== 'active' && m.status_reason && (
+              <p className="member-status-reason">
+                <TriangleAlert size={13} />
+                {m.status_reason}
+              </p>
+            )}
             {m.bio && <p className="bio">{m.bio}</p>}
             <div className="member-phone-edit">
               <Phone size={14} />
@@ -550,7 +671,7 @@ export default function Admin() {
                     className="btn ghost-yet sm"
                     disabled={m.id === me.id}
                     title="Temporarily block sign-in"
-                    onClick={() => remove(m.id, 'suspended', m.display_name)}
+                    onClick={() => requestStatus(m.id, 'suspended', m.display_name)}
                   >
                     <PauseCircle size={14} />
                     Suspend
@@ -559,14 +680,14 @@ export default function Admin() {
                     className="btn danger sm"
                     disabled={m.id === me.id}
                     title="Revoke group membership"
-                    onClick={() => remove(m.id, 'expelled', m.display_name)}
+                    onClick={() => requestStatus(m.id, 'expelled', m.display_name)}
                   >
                     <UserX size={14} />
                     Expel
                   </button>
                 </>
               ) : (
-                <button className="btn sm" onClick={() => remove(m.id, 'active', m.display_name)}>
+                <button className="btn sm" onClick={() => requestStatus(m.id, 'active', m.display_name)}>
                   <RotateCcw size={14} />
                   Reactivate
                 </button>
@@ -581,6 +702,147 @@ export default function Admin() {
         Accounts are never deleted. Suspended members can be reactivated; expelled members can be
         brought back at any time from here.
       </div>
+
+      {statusModal && (
+        <div
+          className="modal-backdrop"
+          onMouseDown={(e) => e.target === e.currentTarget && !modalBusy && setStatusModal(null)}
+        >
+          <div className="modal" role="dialog" aria-modal="true" aria-label="Member status">
+            <div className="modal-head">
+              <span className="icon-tile red">
+                <TriangleAlert size={18} />
+              </span>
+              <div>
+                <h2 className="section-title">
+                  {statusModal.status === 'expelled' ? 'Expel member' : 'Suspend member'}
+                </h2>
+                <p className="muted small">
+                  {statusModal.name} will be blocked from the portal until they are reactivated.
+                </p>
+              </div>
+              <button
+                className="icon-btn"
+                onClick={() => setStatusModal(null)}
+                disabled={modalBusy}
+                aria-label="Close"
+              >
+                <X size={17} />
+              </button>
+            </div>
+            <div className="modal-body">
+              <div className="field">
+                <label htmlFor="status-reason">Reason (shown to the member)</label>
+                <textarea
+                  id="status-reason"
+                  rows={3}
+                  maxLength={500}
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  placeholder="e.g. Repeatedly missing monthly contributions after two reminders."
+                  autoFocus
+                />
+                <span className="field-hint">
+                  This appears the moment {statusModal.name} tries to sign in, and they can appeal
+                  the decision from there.
+                </span>
+              </div>
+              <div className="modal-actions">
+                <button className="btn ghost" onClick={() => setStatusModal(null)} disabled={modalBusy}>
+                  Cancel
+                </button>
+                <button
+                  className={`btn ${statusModal.status === 'expelled' ? 'danger' : ''}`}
+                  disabled={modalBusy || reason.trim().length < 3}
+                  onClick={() => applyStatus(statusModal.id, statusModal.status, reason, statusModal.name)}
+                >
+                  {modalBusy ? (
+                    <Loader2 size={15} className="spin-ico" style={{ position: 'static' }} />
+                  ) : statusModal.status === 'expelled' ? (
+                    <UserX size={15} />
+                  ) : (
+                    <PauseCircle size={15} />
+                  )}
+                  {statusModal.status === 'expelled' ? 'Expel member' : 'Suspend member'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {appealModal && (
+        <div
+          className="modal-backdrop"
+          onMouseDown={(e) => e.target === e.currentTarget && !modalBusy && setAppealModal(null)}
+        >
+          <div className="modal" role="dialog" aria-modal="true" aria-label="Appeal decision">
+            <div className="modal-head">
+              <span className={`icon-tile ${appealModal.decision === 'approved' ? 'green' : 'red'}`}>
+                {appealModal.decision === 'approved' ? (
+                  <CheckCircle2 size={18} />
+                ) : (
+                  <XCircle size={18} />
+                )}
+              </span>
+              <div>
+                <h2 className="section-title">
+                  {appealModal.decision === 'approved' ? 'Approve appeal' : 'Decline appeal'}
+                </h2>
+                <p className="muted small">
+                  {appealModal.decision === 'approved'
+                    ? `Approve ${appealModal.name}'s appeal? Their account will be reactivated.`
+                    : `Decline ${appealModal.name}'s appeal? They will stay blocked.`}
+                </p>
+              </div>
+              <button
+                className="icon-btn"
+                onClick={() => setAppealModal(null)}
+                disabled={modalBusy}
+                aria-label="Close"
+              >
+                <X size={17} />
+              </button>
+            </div>
+            <div className="modal-body">
+              <div className="field">
+                <label htmlFor="appeal-response">Message to the member (optional)</label>
+                <textarea
+                  id="appeal-response"
+                  rows={3}
+                  maxLength={1000}
+                  value={response}
+                  onChange={(e) => setResponse(e.target.value)}
+                  placeholder={
+                    appealModal.decision === 'approved'
+                      ? 'e.g. Please catch up on the outstanding months.'
+                      : 'e.g. The committee reviewed this and the decision stands.'
+                  }
+                />
+              </div>
+              <div className="modal-actions">
+                <button className="btn ghost" onClick={() => setAppealModal(null)} disabled={modalBusy}>
+                  Cancel
+                </button>
+                <button
+                  className={`btn ${appealModal.decision === 'declined' ? 'danger' : ''}`}
+                  disabled={modalBusy}
+                  onClick={() => decideAppeal(appealModal.id, appealModal.decision)}
+                >
+                  {modalBusy ? (
+                    <Loader2 size={15} className="spin-ico" style={{ position: 'static' }} />
+                  ) : appealModal.decision === 'approved' ? (
+                    <CheckCircle2 size={15} />
+                  ) : (
+                    <XCircle size={15} />
+                  )}
+                  {appealModal.decision === 'approved' ? 'Approve & reactivate' : 'Decline appeal'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

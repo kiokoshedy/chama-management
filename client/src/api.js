@@ -128,8 +128,21 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ phone }),
     }),
-  setMemberStatus: (id, status) =>
-    request(`/admin/members/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
+  setMemberStatus: (id, status, reason = '') =>
+    request(`/admin/members/${id}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status, reason }),
+    }),
   changePassword: (data) =>
     request('/members/me/password', { method: 'POST', body: JSON.stringify(data) }),
+
+  submitAppeal: (message) =>
+    request('/appeals', { method: 'POST', body: JSON.stringify({ message }) }),
+  myAppeals: () => request('/appeals/mine'),
+  adminAppeals: () => request('/admin/appeals'),
+  decideAppeal: (id, decision, response = '') =>
+    request(`/admin/appeals/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ decision, response }),
+    }),
 };

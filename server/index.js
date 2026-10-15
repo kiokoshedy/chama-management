@@ -30,6 +30,7 @@ const publicMember = (m) => ({
   role: m.role,
   designation: m.designation || '',
   status: m.status,
+  status_reason: m.status_reason || '',
   created_at: m.created_at,
 });
 
@@ -402,6 +403,7 @@ function loadActive(req, res, next) {
     return res.status(403).json({
       error: STATUS_MESSAGE[member.status] || 'Your account is not active.',
       status: member.status,
+      reason: member.status_reason || '',
     });
   }
   req.member = member;
@@ -1268,6 +1270,7 @@ app.patch('/api/admin/members/:id/phone', requireActiveAdmin, (req, res) => {
 });
 
 const MEMBER_STATUSES = ['active', 'suspended', 'expelled'];
+const MAX_STATUS_REASON_LENGTH = 500;
 
 const DESIGNATIONS = [
   'Chairman',
@@ -1279,10 +1282,19 @@ const DESIGNATIONS = [
 ];
 
 // Suspend, expel, or reactivate a member. Accounts are never deleted.
+// Suspending or expelling requires a reason: it is stored on the member and
+// shown to them the moment they are blocked from signing in.
 app.patch('/api/admin/members/:id/status', requireActiveAdmin, (req, res) => {
-  const { status } = req.body || {};
+  const { status, reason } = req.body || {};
   if (!MEMBER_STATUSES.includes(status)) {
     return res.status(400).json({ error: 'Status must be active, suspended or expelled' });
+  }
+  const note = String(reason || '').trim();
+  if (status !== 'active' && !note) {
+    return res.status(400).json({ error: 'Please give a reason for suspending or expelling this member' });
+  }
+  if (note.length > MAX_STATUS_REASON_LENGTH) {
+    return res.status(400).json({ error: `The reason must be ${MAX_STATUS_REASON_LENGTH} characters or fewer` });
   }
   if (Number(req.params.id) === req.member.id) {
     if (status !== 'active') {
@@ -1300,9 +1312,112 @@ app.patch('/api/admin/members/:id/status', requireActiveAdmin, (req, res) => {
       return res.status(400).json({ error: 'Cannot remove the last active member' });
     }
   }
-  db.prepare('UPDATE members SET status = ? WHERE id = ?').run(status, target.id);
+  if (status === 'active') {
+    db.prepare("UPDATE members SET status = 'active', status_reason = '' WHERE id = ?").run(target.id);
+    // Reactivating resolves any appeal that was still waiting on this member.
+    db.prepare(
+      "UPDATE appeals SET status = 'approved', response = ?, decided_by = ?, decided_at = datetime('now') WHERE member_id = ? AND status = 'pending'"
+    ).run('Your account was reactivated by an administrator.', req.member.id, target.id);
+  } else {
+    db.prepare('UPDATE members SET status = ?, status_reason = ? WHERE id = ?').run(status, note, target.id);
+  }
   const updated = db.prepare('SELECT * FROM members WHERE id = ?').get(target.id);
   res.json({ member: publicMember(updated) });
+});
+
+// ---- Appeals ----
+// A suspended or expelled member can ask the admins to review the decision.
+// These routes deliberately use requireAuth (not the active gate), since the
+// member's own account is not active while an appeal is pending.
+
+const APPEAL_DECISIONS = ['approved', 'declined'];
+const MAX_APPEAL_LENGTH = 1000;
+
+const publicAppeal = (a) => ({
+  id: a.id,
+  member_id: a.member_id,
+  message: a.message,
+  status: a.status,
+  response: a.response || '',
+  created_at: a.created_at,
+  decided_at: a.decided_at || null,
+  display_name: a.display_name,
+  username: a.username,
+  member_status: a.member_status,
+});
+
+app.post('/api/appeals', requireAuth, (req, res) => {
+  const member = db.prepare('SELECT * FROM members WHERE id = ?').get(req.member.id);
+  if (!member) return res.status(401).json({ error: 'Account no longer exists' });
+  if (member.status === 'active') {
+    return res.status(400).json({ error: 'Your account is active — no appeal is needed.' });
+  }
+  const message = String(req.body?.message || '').trim();
+  if (message.length < 10) {
+    return res.status(400).json({ error: 'Please explain your appeal in at least 10 characters' });
+  }
+  if (message.length > MAX_APPEAL_LENGTH) {
+    return res.status(400).json({ error: `Your appeal must be ${MAX_APPEAL_LENGTH} characters or fewer` });
+  }
+  const pending = db
+    .prepare("SELECT id FROM appeals WHERE member_id = ? AND status = 'pending'")
+    .get(member.id);
+  if (pending) {
+    return res.status(409).json({ error: 'You already have an appeal waiting for review.' });
+  }
+  const info = db.prepare('INSERT INTO appeals (member_id, message) VALUES (?, ?)').run(member.id, message);
+  const appeal = db
+    .prepare(
+      `SELECT a.*, m.display_name, m.username, m.status AS member_status
+       FROM appeals a JOIN members m ON m.id = a.member_id WHERE a.id = ?`
+    )
+    .get(info.lastInsertRowid);
+  res.status(201).json({ appeal: publicAppeal(appeal) });
+});
+
+app.get('/api/appeals/mine', requireAuth, (req, res) => {
+  const rows = db
+    .prepare('SELECT * FROM appeals WHERE member_id = ? ORDER BY id DESC')
+    .all(req.member.id);
+  res.json({ appeals: rows.map(publicAppeal) });
+});
+
+app.get('/api/admin/appeals', requireActiveAdmin, (req, res) => {
+  const rows = db
+    .prepare(
+      `SELECT a.*, m.display_name, m.username, m.status AS member_status
+       FROM appeals a JOIN members m ON m.id = a.member_id
+       ORDER BY CASE a.status WHEN 'pending' THEN 0 ELSE 1 END, a.id DESC`
+    )
+    .all();
+  res.json({ appeals: rows.map(publicAppeal) });
+});
+
+// Approving an appeal reactivates the member; declining leaves them blocked.
+app.patch('/api/admin/appeals/:id', requireActiveAdmin, (req, res) => {
+  const { decision, response } = req.body || {};
+  if (!APPEAL_DECISIONS.includes(decision)) {
+    return res.status(400).json({ error: 'Decision must be approved or declined' });
+  }
+  const appeal = db.prepare('SELECT * FROM appeals WHERE id = ?').get(req.params.id);
+  if (!appeal) return res.status(404).json({ error: 'Appeal not found' });
+  if (appeal.status !== 'pending') {
+    return res.status(400).json({ error: 'This appeal has already been decided' });
+  }
+  const note = String(response || '').trim().slice(0, MAX_APPEAL_LENGTH);
+  db.prepare(
+    "UPDATE appeals SET status = ?, response = ?, decided_by = ?, decided_at = datetime('now') WHERE id = ?"
+  ).run(decision, note, req.member.id, appeal.id);
+  if (decision === 'approved') {
+    db.prepare("UPDATE members SET status = 'active', status_reason = '' WHERE id = ?").run(appeal.member_id);
+  }
+  const updated = db
+    .prepare(
+      `SELECT a.*, m.display_name, m.username, m.status AS member_status
+       FROM appeals a JOIN members m ON m.id = a.member_id WHERE a.id = ?`
+    )
+    .get(appeal.id);
+  res.json({ appeal: publicAppeal(updated) });
 });
 
 // Assign or clear a committee designation (Chairman, Treasurer, etc).

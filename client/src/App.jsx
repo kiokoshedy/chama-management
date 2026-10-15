@@ -27,6 +27,7 @@ import Payments from './pages/Payments.jsx';
 import Constitution from './pages/Constitution.jsx';
 import Admin from './pages/Admin.jsx';
 import Profile from './pages/Profile.jsx';
+import { AppealPanel } from './AppealPanel.jsx';
 
 const NAV = [
   { to: '/', label: 'Members', icon: Users, end: true },
@@ -83,6 +84,7 @@ function BlockedScreen({ member, logout }) {
             <span className="muted small">@{member.username}</span>
           </span>
         </div>
+        <AppealPanel member={member} />
         <button className="btn ghost block" onClick={logout}>
           <LogOut size={16} />
           Log out
