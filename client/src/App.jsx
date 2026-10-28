@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Navigate,
   Route,
   Routes,
   NavLink,
   useLocation,
+  useNavigate,
 } from 'react-router-dom';
 import {
   Users,
@@ -19,34 +20,57 @@ import {
   UserX,
   Ban,
   MailQuestion,
+  LayoutDashboard,
+  Sun,
+  Moon,
+  Search,
+  Settings,
+  ChevronDown,
 } from 'lucide-react';
 import { useAuth } from './context/AuthContext.jsx';
+import { useTheme } from './theme.jsx';
+import { api } from './api.js';
 import Login from './pages/Login.jsx';
+import Dashboard from './pages/Dashboard.jsx';
 import Members from './pages/Members.jsx';
 import Payments from './pages/Payments.jsx';
 import Constitution from './pages/Constitution.jsx';
 import Admin from './pages/Admin.jsx';
 import Profile from './pages/Profile.jsx';
 import { AppealPanel } from './AppealPanel.jsx';
-
-const NAV = [
-  { to: '/', label: 'Members', icon: Users, end: true },
-  { to: '/payments', label: 'Payments', icon: Wallet },
-  { to: '/constitution', label: 'Constitution', icon: ScrollText },
-  { to: '/profile', label: 'Profile', icon: UserCircle },
-];
-
-function Avatar({ name, className = '' }) {
-  const variants = ['', 'alt-1', 'alt-2', 'alt-3', 'alt-4', 'alt-5'];
-  const seed = name.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
-  return (
-    <span className={`avatar ${className} ${variants[seed % variants.length]}`}>
-      {name.charAt(0).toUpperCase()}
-    </span>
-  );
-}
+import { Avatar } from './components/Avatar.jsx';
 
 export { Avatar };
+
+const NAV = [
+  {
+    label: 'Overview',
+    items: [
+      { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
+      { to: '/members', label: 'Members', icon: Users },
+    ],
+  },
+  {
+    label: 'Group',
+    items: [
+      { to: '/payments', label: 'Payments', icon: Wallet },
+      { to: '/constitution', label: 'Constitution', icon: ScrollText },
+    ],
+  },
+  {
+    label: 'Account',
+    items: [{ to: '/profile', label: 'Profile', icon: UserCircle }],
+  },
+];
+
+const TITLES = [
+  { test: (p) => p === '/', label: 'Dashboard', crumb: 'Overview' },
+  { test: (p) => p.startsWith('/members'), label: 'Members', crumb: 'Directory' },
+  { test: (p) => p.startsWith('/payments'), label: 'Payments', crumb: 'Contributions' },
+  { test: (p) => p.startsWith('/constitution'), label: 'Constitution', crumb: 'Documents' },
+  { test: (p) => p.startsWith('/admin'), label: 'Admin', crumb: 'Administration' },
+  { test: (p) => p.startsWith('/profile'), label: 'Profile', crumb: 'Account' },
+];
 
 const BLOCKED = {
   suspended: {
@@ -94,17 +118,113 @@ function BlockedScreen({ member, logout }) {
   );
 }
 
+function UserMenu({ member, logout }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onClick = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    };
+    const onKey = (e) => e.key === 'Escape' && setOpen(false);
+    document.addEventListener('mousedown', onClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onClick);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="user-menu" ref={ref}>
+      <button
+        className="user-menu-trigger"
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        <Avatar name={member.display_name} className="sm" />
+        <span className="user-menu-name">
+          <strong>{member.display_name}</strong>
+          <span>@{member.username}</span>
+        </span>
+        <ChevronDown size={15} className={open ? 'rotate' : ''} />
+      </button>
+      {open && (
+        <div className="user-menu-panel" role="menu">
+          <div className="user-menu-head">
+            <Avatar name={member.display_name} />
+            <div>
+              <strong>{member.display_name}</strong>
+              <span>@{member.username}</span>
+            </div>
+          </div>
+          <button
+            className="user-menu-item"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              navigate('/profile');
+            }}
+          >
+            <Settings size={15} />
+            Profile settings
+          </button>
+          <button
+            className="user-menu-item danger"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              logout();
+            }}
+          >
+            <LogOut size={15} />
+            Sign out
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Shell({ member, logout }) {
   const [navOpen, setNavOpen] = useState(false);
-  const closeNav = () => setNavOpen(false);
+  const [pendingApprovals, setPendingApprovals] = useState(0);
+  const [search, setSearch] = useState('');
   const location = useLocation();
-  const activeLabel =
-    (location.pathname === '/' && 'Members') ||
-    (location.pathname.startsWith('/payments') && 'Payments') ||
-    (location.pathname.startsWith('/constitution') && 'Constitution') ||
-    (location.pathname.startsWith('/admin') && 'Admin') ||
-    (location.pathname.startsWith('/profile') && 'Profile') ||
-    '';
+  const navigate = useNavigate();
+  const { isDark, toggle } = useTheme();
+  const closeNav = () => setNavOpen(false);
+
+  const current = TITLES.find((t) => t.test(location.pathname)) || {
+    label: 'Group Hub',
+    crumb: '',
+  };
+
+  // Admin badge: how many payment requests are waiting for a decision.
+  useEffect(() => {
+    if (member.role !== 'admin') return undefined;
+    let cancelled = false;
+    api
+      .adminPayments()
+      .then(({ payments }) => {
+        if (cancelled) return;
+        setPendingApprovals(payments.filter((p) => p.status === 'requested').length);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [member.role, location.pathname]);
+
+  const submitSearch = (e) => {
+    e.preventDefault();
+    const q = search.trim();
+    navigate(q ? `/members?q=${encodeURIComponent(q)}` : '/members');
+    setSearch('');
+  };
 
   return (
     <div className="app-shell">
@@ -122,28 +242,37 @@ function Shell({ member, logout }) {
         </div>
 
         <nav className="sidebar-nav">
-          <div className="nav-label">Overview</div>
-          {NAV.map(({ to, label, icon: Icon, end }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={end}
-              className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
-              onClick={closeNav}
-            >
-              <Icon size={18} />
-              {label}
-            </NavLink>
+          {NAV.map((group) => (
+            <div key={group.label}>
+              <div className="nav-label">{group.label}</div>
+              {group.items.map(({ to, label, icon: Icon, end }) => (
+                <NavLink
+                  key={to}
+                  to={to}
+                  end={end}
+                  className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+                  onClick={closeNav}
+                >
+                  <Icon size={18} />
+                  {label}
+                </NavLink>
+              ))}
+            </div>
           ))}
 
           {member.role === 'admin' && (
-            <>
+            <div>
               <div className="nav-label">Administration</div>
-              <NavLink to="/admin" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={closeNav}>
+              <NavLink
+                to="/admin"
+                className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+                onClick={closeNav}
+              >
                 <ShieldCheck size={18} />
                 Admin
+                {pendingApprovals > 0 && <span className="nav-badge">{pendingApprovals}</span>}
               </NavLink>
-            </>
+            </div>
           )}
         </nav>
 
@@ -153,7 +282,7 @@ function Shell({ member, logout }) {
             <strong>{member.display_name}</strong>
             <span>@{member.username}</span>
           </div>
-          <button className="icon-btn" title="Log out" onClick={logout}>
+          <button className="icon-btn" title="Log out" onClick={logout} aria-label="Log out">
             <LogOut size={17} />
           </button>
         </div>
@@ -164,23 +293,56 @@ function Shell({ member, logout }) {
           <button className="hamburger" onClick={() => setNavOpen(true)} aria-label="Open menu">
             <Menu size={19} />
           </button>
-          <span className="topbar-title">{activeLabel}</span>
+
+          <div className="topbar-lead">
+            <span className="topbar-title">{current.label}</span>
+            {current.crumb && <span className="topbar-crumb">/ {current.crumb}</span>}
+          </div>
+
           <div className="topbar-spacer" />
-          <span className="topbar-chip hide-sm">
-            <span className="dot" style={{ width: 8, height: 8, borderRadius: '50%', background: '#12b76a', display: 'inline-block' }} />
-            Signed in as {member.username}
-          </span>
+
+          <form className="topbar-search hide-sm" onSubmit={submitSearch} role="search">
+            <Search size={15} />
+            <input
+              type="search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search members…"
+              aria-label="Search members"
+            />
+          </form>
+
+          <div className="topbar-actions">
+            <button
+              className="icon-btn theme-toggle"
+              onClick={toggle}
+              title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+              aria-label="Toggle colour theme"
+            >
+              {isDark ? <Sun size={17} /> : <Moon size={17} />}
+            </button>
+
+            <span className="topbar-chip hide-sm">
+              <span className="status-dot" />
+              {member.role === 'admin' ? 'Administrator' : 'Member'}
+            </span>
+
+            <UserMenu member={member} logout={logout} />
+          </div>
         </header>
 
         <main className="content">
-          <Routes>
-            <Route path="/" element={<Members />} />
-            <Route path="/payments" element={<Payments />} />
-            <Route path="/constitution" element={<Constitution />} />
-            <Route path="/profile" element={<Profile />} />
-            {member.role === 'admin' && <Route path="/admin" element={<Admin />} />}
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
+          <div className="page-enter" key={location.pathname}>
+            <Routes location={location}>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/members" element={<Members />} />
+              <Route path="/payments" element={<Payments />} />
+              <Route path="/constitution" element={<Constitution />} />
+              <Route path="/profile" element={<Profile />} />
+              {member.role === 'admin' && <Route path="/admin" element={<Admin />} />}
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </div>
         </main>
       </div>
     </div>

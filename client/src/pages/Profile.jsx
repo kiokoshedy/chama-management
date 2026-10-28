@@ -1,14 +1,31 @@
-import { useState } from 'react';
-import { CalendarDays, Save, UserCircle2, Loader2, KeyRound, Phone } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import {
+  CalendarDays,
+  Save,
+  UserCircle2,
+  Loader2,
+  KeyRound,
+  Phone,
+  Wallet,
+  CheckCircle2,
+  CircleAlert,
+  ShieldCheck,
+  Eye,
+  EyeOff,
+} from 'lucide-react';
 import { api } from '../api.js';
 import { useAuth } from '../context/AuthContext.jsx';
-import { Avatar } from '../App.jsx';
+import { Avatar } from '../components/Avatar.jsx';
+import { PageHeader, StatCard } from '../components/ui.jsx';
+import { useToast } from '../components/Toast.jsx';
+import { fmt } from '../format.js';
 
 export default function Profile() {
   const { member, refresh } = useAuth();
+  const toast = useToast();
   const [form, setForm] = useState({
     display_name: member.display_name,
-    bio: member.bio,
+    bio: member.bio || '',
     phone: member.phone || '',
   });
   const [message, setMessage] = useState('');
@@ -19,6 +36,24 @@ export default function Profile() {
   const [pwMessage, setPwMessage] = useState('');
   const [pwError, setPwError] = useState('');
   const [pwSaving, setPwSaving] = useState(false);
+  const [showPw, setShowPw] = useState(false);
+
+  const [summary, setSummary] = useState({ collected: 0, count: 0, outstanding: 0 });
+
+  useEffect(() => {
+    api
+      .paymentsMe()
+      .then(({ payments }) => {
+        const collected = payments
+          .filter((p) => p.status === 'paid')
+          .reduce((sum, p) => sum + Number(p.total || 0), 0);
+        const outstanding = payments
+          .filter((p) => p.status !== 'paid')
+          .reduce((sum, p) => sum + Number(p.total || 0), 0);
+        setSummary({ collected, count: payments.length, outstanding });
+      })
+      .catch(() => {});
+  }, []);
 
   const change = (e) => setForm({ ...form, [e.target.name]: e.target.value });
   const changePw = (e) => setPw({ ...pw, [e.target.name]: e.target.value });
@@ -32,8 +67,10 @@ export default function Profile() {
       await api.updateMe(form);
       await refresh();
       setMessage('Profile saved.');
+      toast.success('Profile updated', 'Your details are saved and visible to the group.');
     } catch (err) {
       setError(err.message);
+      toast.error('Could not save', err.message);
     } finally {
       setSaving(false);
     }
@@ -53,11 +90,16 @@ export default function Profile() {
     }
     setPwSaving(true);
     try {
-      await api.changePassword({ current_password: pw.current_password, new_password: pw.new_password });
+      await api.changePassword({
+        current_password: pw.current_password,
+        new_password: pw.new_password,
+      });
       setPw({ current_password: '', new_password: '', confirm: '' });
       setPwMessage('Password updated. Use your new password next time you sign in.');
+      toast.success('Password updated', 'Use your new password the next time you sign in.');
     } catch (err) {
       setPwError(err.message);
+      toast.error('Could not update password', err.message);
     } finally {
       setPwSaving(false);
     }
@@ -65,16 +107,15 @@ export default function Profile() {
 
   return (
     <div>
-      <div className="page-header">
-        <div>
-          <h1>Profile</h1>
-          <p className="page-sub">Your public member details, visible to the rest of the group.</p>
-        </div>
-      </div>
+      <PageHeader
+        eyebrow="Account"
+        title="Profile"
+        subtitle="Your public member details — visible to the rest of the group in the directory."
+      />
 
       <div className="card wide">
         <div className="profile-hero">
-          <Avatar name={form.display_name || member.display_name} />
+          <Avatar name={form.display_name || member.display_name} className="xl" />
           <div>
             <h2>{form.display_name || member.display_name}</h2>
             <div className="profile-meta">
@@ -88,61 +129,105 @@ export default function Profile() {
           </div>
         </div>
 
-        <form onSubmit={save}>
-          <div className="field">
-            <label htmlFor="display_name">Display name</label>
-            <input id="display_name" name="display_name" value={form.display_name} onChange={change} />
+        <div className="profile-body">
+          <div className="stat-grid" style={{ marginBottom: 22 }}>
+            <StatCard
+              label="Total contributed"
+              value={fmt(summary.collected)}
+              hint={`${summary.count} payment records`}
+              icon={Wallet}
+              tone="green"
+            />
+            <StatCard
+              label="Outstanding"
+              value={fmt(summary.outstanding)}
+              hint="Still to be cleared"
+              icon={CircleAlert}
+              tone="amber"
+            />
+            <StatCard
+              label="Access level"
+              value={member.role === 'admin' ? 'Admin' : 'Member'}
+              hint={member.designation || 'Regular member'}
+              icon={ShieldCheck}
+              tone="blue"
+            />
           </div>
-          <div className="field">
-            <label htmlFor="bio">Bio</label>
-            <textarea id="bio" name="bio" value={form.bio} onChange={change} rows={4} placeholder="Tell your group a little about yourself…" />
-          </div>
-          <div className="field">
-            <label htmlFor="phone">Mobile number</label>
-            <div className="input-with-icon">
-              <Phone size={16} />
+
+          <form onSubmit={save}>
+            <div className="field">
+              <label htmlFor="display_name">Display name</label>
               <input
-                id="phone"
-                name="phone"
-                type="tel"
-                value={form.phone}
+                id="display_name"
+                name="display_name"
+                value={form.display_name}
                 onChange={change}
-                placeholder="0712345678"
-                autoComplete="tel"
+                placeholder="Your full name"
               />
             </div>
-            <span className="field-hint">Used for contribution reminders. Kenyan numbers are normalized automatically.</span>
-          </div>
 
-          {message && (
-            <div className="alert success" style={{ marginBottom: 0 }}>
-              <UserCircle2 size={17} />
-              {message}
+            <div className="field">
+              <label htmlFor="bio">Bio</label>
+              <textarea
+                id="bio"
+                name="bio"
+                value={form.bio}
+                onChange={change}
+                rows={4}
+                placeholder="Tell your group a little about yourself…"
+              />
+              <span className="field-hint">Shown on your card in the member directory.</span>
             </div>
-          )}
-          {error && (
-            <div className="alert error" style={{ marginBottom: 0 }}>
-              <UserCircle2 size={17} />
-              {error}
-            </div>
-          )}
 
-          <div style={{ marginTop: 16 }}>
-            <button className="btn" disabled={saving}>
-              {saving ? (
-                <>
-                  <Loader2 size={16} className="spin-ico" />
-                  Saving…
-                </>
-              ) : (
-                <>
-                  <Save size={16} />
-                  Save profile
-                </>
-              )}
-            </button>
-          </div>
-        </form>
+            <div className="field">
+              <label htmlFor="phone">Mobile number</label>
+              <div className="input-with-icon">
+                <Phone size={16} />
+                <input
+                  id="phone"
+                  name="phone"
+                  type="tel"
+                  value={form.phone}
+                  onChange={change}
+                  placeholder="0712345678"
+                  autoComplete="tel"
+                />
+              </div>
+              <span className="field-hint">
+                Used for contribution reminders. Kenyan numbers are normalised automatically.
+              </span>
+            </div>
+
+            {message && (
+              <div className="alert success" style={{ marginBottom: 0 }}>
+                <UserCircle2 size={17} />
+                {message}
+              </div>
+            )}
+            {error && (
+              <div className="alert error" style={{ marginBottom: 0 }}>
+                <UserCircle2 size={17} />
+                {error}
+              </div>
+            )}
+
+            <div style={{ marginTop: 18 }}>
+              <button className="btn" disabled={saving}>
+                {saving ? (
+                  <>
+                    <Loader2 size={16} className="spin-ico" />
+                    Saving…
+                  </>
+                ) : (
+                  <>
+                    <Save size={16} />
+                    Save profile
+                  </>
+                )}
+              </button>
+            </div>
+          </form>
+        </div>
       </div>
 
       <div className="card wide" style={{ marginTop: 22 }}>
@@ -153,7 +238,7 @@ export default function Profile() {
             </span>
             <div>
               <h2>Change password</h2>
-              <p className="muted small">Use this to set your own password.</p>
+              <p className="muted small">Set your own password — you sign in with this one.</p>
             </div>
           </div>
         </div>
@@ -164,33 +249,47 @@ export default function Profile() {
               <input
                 id="current_password"
                 name="current_password"
-                type="password"
+                type={showPw ? 'text' : 'password'}
                 value={pw.current_password}
                 onChange={changePw}
                 autoComplete="current-password"
                 required
               />
             </div>
+
             <div className="form-grid">
               <div className="field">
                 <label htmlFor="new_password">New password</label>
-                <input
-                  id="new_password"
-                  name="new_password"
-                  type="password"
-                  value={pw.new_password}
-                  onChange={changePw}
-                  autoComplete="new-password"
-                  minLength={6}
-                  required
-                />
+                <div className="input-with-icon">
+                  <KeyRound size={16} />
+                  <input
+                    id="new_password"
+                    name="new_password"
+                    type={showPw ? 'text' : 'password'}
+                    value={pw.new_password}
+                    onChange={changePw}
+                    autoComplete="new-password"
+                    minLength={6}
+                    required
+                    style={{ paddingRight: 42 }}
+                  />
+                  <button
+                    type="button"
+                    className="icon-btn input-action"
+                    onClick={() => setShowPw((v) => !v)}
+                    aria-label={showPw ? 'Hide password' : 'Show password'}
+                    tabIndex={-1}
+                  >
+                    {showPw ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
               </div>
               <div className="field">
                 <label htmlFor="confirm">Confirm new password</label>
                 <input
                   id="confirm"
                   name="confirm"
-                  type="password"
+                  type={showPw ? 'text' : 'password'}
                   value={pw.confirm}
                   onChange={changePw}
                   autoComplete="new-password"
@@ -201,7 +300,7 @@ export default function Profile() {
 
             {pwMessage && (
               <div className="alert success" style={{ marginBottom: 0 }}>
-                <UserCircle2 size={17} />
+                <CheckCircle2 size={17} />
                 {pwMessage}
               </div>
             )}
@@ -212,7 +311,7 @@ export default function Profile() {
               </div>
             )}
 
-            <div style={{ marginTop: 16 }}>
+            <div style={{ marginTop: 18 }}>
               <button className="btn" disabled={pwSaving}>
                 {pwSaving ? (
                   <>
