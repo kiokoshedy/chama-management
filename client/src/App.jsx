@@ -26,6 +26,7 @@ import {
   Search,
   Settings,
   ChevronDown,
+  NotebookText,
 } from 'lucide-react';
 import { useAuth } from './context/AuthContext.jsx';
 import { useTheme } from './theme.jsx';
@@ -34,6 +35,7 @@ import Login from './pages/Login.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import Members from './pages/Members.jsx';
 import Payments from './pages/Payments.jsx';
+import Minutes from './pages/Minutes.jsx';
 import Constitution from './pages/Constitution.jsx';
 import Admin from './pages/Admin.jsx';
 import Profile from './pages/Profile.jsx';
@@ -54,6 +56,7 @@ const NAV = [
     label: 'Group',
     items: [
       { to: '/payments', label: 'Payments', icon: Wallet },
+      { to: '/minutes', label: 'Minutes', icon: NotebookText },
       { to: '/constitution', label: 'Constitution', icon: ScrollText },
     ],
   },
@@ -67,6 +70,7 @@ const TITLES = [
   { test: (p) => p === '/', label: 'Dashboard', crumb: 'Overview' },
   { test: (p) => p.startsWith('/members'), label: 'Members', crumb: 'Directory' },
   { test: (p) => p.startsWith('/payments'), label: 'Payments', crumb: 'Contributions' },
+  { test: (p) => p.startsWith('/minutes'), label: 'Meeting minutes', crumb: 'Documents' },
   { test: (p) => p.startsWith('/constitution'), label: 'Constitution', crumb: 'Documents' },
   { test: (p) => p.startsWith('/admin'), label: 'Admin', crumb: 'Administration' },
   { test: (p) => p.startsWith('/profile'), label: 'Profile', crumb: 'Account' },
@@ -213,7 +217,7 @@ function Shell({ member, logout }) {
         if (cancelled) return;
         setPendingApprovals(payments.filter((p) => p.status === 'requested').length);
       })
-      .catch(() => {});
+      .catch(() => { });
     return () => {
       cancelled = true;
     };
@@ -236,7 +240,7 @@ function Shell({ member, logout }) {
             <LayoutGrid size={19} />
           </span>
           <span className="brand-text">
-            <strong>Kwani Si Udo?</strong>
+            <strong>Exclusive</strong>
             <span>It's Us</span>
           </span>
         </div>
@@ -337,6 +341,7 @@ function Shell({ member, logout }) {
               <Route path="/" element={<Dashboard />} />
               <Route path="/members" element={<Members />} />
               <Route path="/payments" element={<Payments />} />
+              <Route path="/minutes" element={<Minutes />} />
               <Route path="/constitution" element={<Constitution />} />
               <Route path="/profile" element={<Profile />} />
               {member.role === 'admin' && <Route path="/admin" element={<Admin />} />}

@@ -13,6 +13,7 @@ import {
   ArrowRight,
   ShieldCheck,
   ScrollText,
+  NotebookText,
   Sparkles,
   CircleAlert,
   Crown,
@@ -425,6 +426,10 @@ export default function Dashboard() {
               <Link to="/members" className="quick-action">
                 <Users size={16} />
                 Members
+              </Link>
+              <Link to="/minutes" className="quick-action">
+                <NotebookText size={16} />
+                Meeting minutes
               </Link>
               <Link to="/constitution" className="quick-action">
                 <ScrollText size={16} />

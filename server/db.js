@@ -77,15 +77,17 @@ db.exec(`
     error TEXT
   );
 
-  CREATE TABLE IF NOT EXISTS appeals (
+  CREATE TABLE IF NOT EXISTS minutes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    member_id INTEGER NOT NULL REFERENCES members(id) ON DELETE CASCADE,
-    message TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending',
-    response TEXT NOT NULL DEFAULT '',
-    decided_by INTEGER REFERENCES members(id),
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    decided_at TEXT
+    title TEXT NOT NULL,
+    meeting_date TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    filename TEXT NOT NULL,
+    original_name TEXT NOT NULL,
+    mime TEXT NOT NULL DEFAULT 'application/pdf',
+    size INTEGER NOT NULL DEFAULT 0,
+    uploaded_by INTEGER REFERENCES members(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 `);
 
@@ -99,9 +101,6 @@ if (!memberColumns.some((c) => c.name === 'designation')) {
 if (!memberColumns.some((c) => c.name === 'phone')) {
   db.exec("ALTER TABLE members ADD COLUMN phone TEXT NOT NULL DEFAULT ''");
 }
-if (!memberColumns.some((c) => c.name === 'status_reason')) {
-  db.exec("ALTER TABLE members ADD COLUMN status_reason TEXT NOT NULL DEFAULT ''");
-}
 
 const paymentColumns = db.prepare('PRAGMA table_info(payments)').all();
 if (!paymentColumns.some((c) => c.name === 'fine_reason')) {
@@ -112,7 +111,7 @@ if (!paymentColumns.some((c) => c.name === 'due_date')) {
 }
 
 // ---- Payment proof ----
-// Members paste the M-Pesa or bank confirmation message they received. The raw
+// Members paste the M-Pesa or Bank confirmation message they received. The raw
 // text is always stored verbatim; the parsed columns are a best-effort summary
 // so an admin can verify without re-reading every message by eye.
 

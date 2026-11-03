@@ -66,6 +66,40 @@ export const api = {
     return body;
   },
 
+  minutes: () => request('/minutes'),
+  minutesFile: async (id, download = false) => {
+    const token = localStorage.getItem('token');
+    const res = await fetch(`${API}/minutes/${id}/file${download ? '?download=1' : ''}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || `Request failed (${res.status})`);
+    }
+    return { blob: await res.blob(), mime: res.headers.get('Content-Type') || '' };
+  },
+  uploadMinutes: async (file, data) => {
+    const token = localStorage.getItem('token');
+    const form = new FormData();
+    form.append('file', file);
+    form.append('title', data.title);
+    form.append('meeting_date', data.meeting_date);
+    form.append('description', data.description || '');
+    const res = await fetch(`${API}/admin/minutes`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: form,
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const err = new Error(body.error || `Upload failed (${res.status})`);
+      err.status = res.status;
+      throw err;
+    }
+    return body;
+  },
+  deleteMinutes: (id) => request(`/admin/minutes/${id}`, { method: 'DELETE' }),
+
   parseProof: (message) =>
     request('/proof/parse', { method: 'POST', body: JSON.stringify({ message }) }),
 

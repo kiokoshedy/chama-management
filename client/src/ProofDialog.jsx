@@ -46,8 +46,8 @@ export function ProofDetails({ proof, amountDue = null, audience = 'admin' }) {
           <TriangleAlert size={16} />
           {audience === 'admin'
             ? `The amount on the message (${fmt(proof.amount)}) does not match the amount due (${fmt(
-                amountDue
-              )}). Check it before approving.`
+              amountDue
+            )}). Check it before approving.`
             : `This message says ${fmt(proof.amount)}, but ${fmt(amountDue)} is due. Paste the right message, or ask the admin if you paid a different amount.`}
         </div>
       )}

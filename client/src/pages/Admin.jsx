@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { UserPlus, Coins, ShieldCheck, Loader2, PauseCircle, UserX, RotateCcw, KeyRound, FileText, Eye, CalendarClock, HardDrive, CloudUpload, LinkIcon, ExternalLink, UserCheck, Phone, Send, X, TriangleAlert, CheckCircle2, XCircle, MessageSquareText } from 'lucide-react';
+import { UserPlus, Coins, ShieldCheck, Loader2, PauseCircle, UserX, RotateCcw, KeyRound, FileText, Eye, CalendarClock, HardDrive, CloudUpload, LinkIcon, ExternalLink, UserCheck, Phone, Send, X, TriangleAlert, CheckCircle2, XCircle, MessageSquareText, NotebookText } from 'lucide-react';
 import { api } from '../api.js';
-import { fmt, currency, fmtBytes, fmtDate } from '../format.js';
+import { fmt, currency, fmtBytes, fmtDate, fmtDateShort } from '../format.js';
 import { Avatar } from '../App.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
 import { Link } from 'react-router-dom';
@@ -46,6 +46,7 @@ export default function Admin() {
   const [constitution, setConstitution] = useState(null);
   const [constUrl, setConstUrl] = useState(null);
   const [constBusy, setConstBusy] = useState(false);
+  const [minutes, setMinutes] = useState([]);
   const [appeals, setAppeals] = useState([]);
   const [statusModal, setStatusModal] = useState(null);
   const [reason, setReason] = useState('');
@@ -54,13 +55,14 @@ export default function Admin() {
   const [modalBusy, setModalBusy] = useState(false);
 
   const load = async () => {
-    const [{ members }, { monthly_amount }, smsStatus, { reminders }, { appeals: appealsList }] =
+    const [{ members }, { monthly_amount }, smsStatus, { reminders }, { appeals: appealsList }, { minutes: minutesList }] =
       await Promise.all([
         api.members(),
         api.settings(),
         api.smsStatus(),
         api.smsReminders(),
         api.adminAppeals(),
+        api.minutes(),
       ]);
     setMembers(members);
     setPhoneDrafts(Object.fromEntries(members.map((m) => [m.id, m.phone || ''])));
@@ -68,6 +70,7 @@ export default function Admin() {
     setSms(smsStatus);
     setSmsHistory(reminders);
     setAppeals(appealsList);
+    setMinutes(minutesList);
     const doc = await api.constitution();
     setConstitution(doc);
     if (doc.exists) {
@@ -519,6 +522,52 @@ export default function Admin() {
               until you publish one.
             </div>
           )}
+        </div>
+      </div>
+
+      <div className="card pad wide minutes-admin-card">
+        <div className="card-title-row">
+          <span className="icon-tile blue">
+            <NotebookText size={18} />
+          </span>
+          <div>
+            <h2>Meeting minutes</h2>
+            <p className="muted small">
+              Minutes published to members after each group meeting.
+            </p>
+          </div>
+          <span className="badge member" style={{ marginLeft: 'auto' }}>
+            {minutes.length} published
+          </span>
+        </div>
+        <div style={{ marginTop: 16 }}>
+          {minutes.length === 0 ? (
+            <div className="alert info" style={{ marginBottom: 0 }}>
+              <NotebookText size={17} />
+              No minutes have been published yet. Upload the record of your next meeting so members
+              can read it.
+            </div>
+          ) : (
+            <div className="minutes-admin-list">
+              {minutes.slice(0, 3).map((minute) => (
+                <div className="minutes-admin-row" key={minute.id}>
+                  <CalendarClock size={14} />
+                  <div>
+                    <strong>{minute.title}</strong>
+                    <span className="muted small">
+                      {fmtDateShort(minute.meeting_date)} · {minute.name}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={{ marginTop: 14 }}>
+            <Link to="/minutes" className="btn">
+              <CloudUpload size={15} />
+              {minutes.length === 0 ? 'Upload minutes' : 'Manage minutes'}
+            </Link>
+          </div>
         </div>
       </div>
 

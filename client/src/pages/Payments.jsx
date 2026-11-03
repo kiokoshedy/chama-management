@@ -177,7 +177,7 @@ function ContributionsAdmin() {
       <form className="contrib-create" onSubmit={create} style={{ marginTop: 18 }}>
         <div className="field" style={{ gridArea: 'title' }}>
           <label>Title</label>
-          <input name="title" value={form.title} onChange={change} placeholder="e.g. Wedding gift for Sara" required />
+          <input name="title" value={form.title} onChange={change} placeholder="e.g. Wedding gift for Shady." required />
         </div>
         <div className="field" style={{ gridArea: 'amount' }}>
           <label>Amount ({currency})</label>

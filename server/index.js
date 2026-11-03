@@ -566,6 +566,133 @@ app.post('/api/admin/constitution', requireActiveAdmin, upload.single('file'), (
   res.json({ ok: true, ...constitutionMeta() });
 });
 
+// ---- Meeting minutes ----
+// Admins publish the minutes of each group meeting as a PDF or Word document.
+// Members can browse the archive and open or download any document. Deleting a
+// minute removes both its database row and the stored file.
+
+const MINUTES_DIR = path.join(__dirname, 'uploads', 'minutes');
+
+const ensureMinutesDir = () => fs.mkdirSync(MINUTES_DIR, { recursive: true });
+
+const minutesUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => {
+      ensureMinutesDir();
+      cb(null, MINUTES_DIR);
+    },
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname).toLowerCase() || '.pdf';
+      const suffix = Math.random().toString(16).slice(2, 8);
+      cb(null, `minutes-${Date.now()}-${suffix}${ext}`);
+    },
+  }),
+  limits: { fileSize: MAX_FILE_SIZE, files: 1 },
+  fileFilter: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, ALLOWED_EXT.includes(ext) && ALLOWED_MIME.includes(file.mimetype));
+  },
+});
+
+const publicMinute = (m) => ({
+  id: m.id,
+  title: m.title,
+  meeting_date: m.meeting_date,
+  description: m.description || '',
+  name: m.original_name,
+  mime: m.mime,
+  size: Number(m.size || 0),
+  uploaded_by: m.uploaded_by,
+  uploaded_by_name: m.uploaded_by_name || '',
+  created_at: m.created_at,
+});
+
+const minuteQuery = `
+  SELECT mi.*, m.display_name AS uploaded_by_name
+  FROM minutes mi
+  LEFT JOIN members m ON m.id = mi.uploaded_by`;
+
+const findMinute = (id) => db.prepare(`${minuteQuery} WHERE mi.id = ?`).get(id);
+
+app.get('/api/minutes', requireActiveUser, (req, res) => {
+  const rows = db
+    .prepare(`${minuteQuery} ORDER BY mi.meeting_date DESC, mi.id DESC`)
+    .all();
+  res.json({ minutes: rows.map(publicMinute) });
+});
+
+app.get('/api/minutes/:id/file', requireActiveUser, (req, res) => {
+  const minute = findMinute(req.params.id);
+  if (!minute) return res.status(404).json({ error: 'Minutes not found' });
+  const filePath = path.join(MINUTES_DIR, path.basename(minute.filename));
+  if (!fs.existsSync(filePath)) {
+    db.prepare('DELETE FROM minutes WHERE id = ?').run(minute.id);
+    return res.status(404).json({ error: 'The uploaded file is no longer available' });
+  }
+  const disposition = req.query.download ? 'attachment' : 'inline';
+  res.setHeader('Content-Type', minute.mime);
+  res.setHeader('Cache-Control', 'private, max-age=60');
+  res.setHeader(
+    'Content-Disposition',
+    `${disposition}; filename*=UTF-8''${encodeURIComponent(minute.original_name)}`
+  );
+  fs.createReadStream(filePath).pipe(res);
+});
+
+app.post('/api/admin/minutes', requireActiveAdmin, minutesUpload.single('file'), (req, res) => {
+  const discard = () => {
+    if (req.file) fs.unlink(req.file.path, () => { });
+  };
+  if (!req.file) {
+    return res.status(400).json({ error: 'Choose a PDF or Word document to upload' });
+  }
+  if (req.file.size > MAX_FILE_SIZE) {
+    discard();
+    return res.status(413).json({ error: 'File is too large (max 15 MB)' });
+  }
+  const title = String(req.body?.title || '').trim();
+  if (!title) {
+    discard();
+    return res.status(400).json({ error: 'A title is required' });
+  }
+  if (title.length > 160) {
+    discard();
+    return res.status(400).json({ error: 'The title must be 160 characters or fewer' });
+  }
+  const meetingDate = parseDateOnly(req.body?.meeting_date);
+  if (!meetingDate) {
+    discard();
+    return res.status(400).json({ error: 'A valid meeting date (YYYY-MM-DD) is required' });
+  }
+  const description = String(req.body?.description || '').trim().slice(0, 1000);
+
+  const info = db
+    .prepare(
+      `INSERT INTO minutes
+         (title, meeting_date, description, filename, original_name, mime, size, uploaded_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      title,
+      meetingDate,
+      description,
+      req.file.filename,
+      path.basename(req.file.originalname),
+      req.file.mimetype,
+      req.file.size,
+      req.member.id
+    );
+  res.status(201).json({ minute: publicMinute(findMinute(info.lastInsertRowid)) });
+});
+
+app.delete('/api/admin/minutes/:id', requireActiveAdmin, (req, res) => {
+  const minute = findMinute(req.params.id);
+  if (!minute) return res.status(404).json({ error: 'Minutes not found' });
+  db.prepare('DELETE FROM minutes WHERE id = ?').run(minute.id);
+  fs.unlink(path.join(MINUTES_DIR, path.basename(minute.filename)), () => { });
+  res.json({ ok: true });
+});
+
 // ---- Settings ----
 
 app.get('/api/admin/settings', requireActiveAdmin, (req, res) => {

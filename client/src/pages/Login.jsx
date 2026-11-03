@@ -40,7 +40,7 @@ export default function Login() {
   useEffect(() => {
     document.title = 'Sign in · Group Hub';
     return () => {
-      document.title = 'Group Hub — Exclusive It’s Us';
+      document.title = 'Exclusive — Exclusive It’s Us';
     };
   }, []);
 
@@ -65,7 +65,7 @@ export default function Login() {
           <span className="brand-mark">
             <LayoutGrid size={20} />
           </span>
-          <strong>Group Hub</strong>
+          <strong>Exclusive Hub.</strong>
         </div>
 
         <div>
