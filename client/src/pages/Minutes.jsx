@@ -117,7 +117,7 @@ export default function Minutes() {
       return;
     }
     if (!form.title.trim()) {
-      setUploadError('Give these minutes a title, e.g. “Committee meeting — October”.');
+      setUploadError('Give these minutes a title, e.g. “Club AGM meeting — October”.');
       return;
     }
     if (!form.meeting_date) {
@@ -220,7 +220,7 @@ export default function Minutes() {
             name="title"
             value={form.title}
             onChange={change}
-            placeholder="e.g. Committee meeting — October"
+            placeholder="e.g. Club AGM meeting — October"
             maxLength={160}
             required
           />
