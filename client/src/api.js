@@ -150,8 +150,6 @@ export const api = {
   sendSmsReminders: () => request('/admin/sms/send', { method: 'POST' }),
 
   createMember: (data) => request('/admin/members', { method: 'POST', body: JSON.stringify(data) }),
-  setRole: (id, role) =>
-    request(`/admin/members/${id}/role`, { method: 'PATCH', body: JSON.stringify({ role }) }),
   setDesignation: (id, designation) =>
     request(`/admin/members/${id}/designation`, {
       method: 'PATCH',

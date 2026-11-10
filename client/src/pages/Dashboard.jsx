@@ -51,7 +51,7 @@ function buildChart(payments) {
 
 export default function Dashboard() {
   const { member } = useAuth();
-  const isAdmin = member.role === 'admin';
+  const isAdmin = member.role === 'admin' ;
   const [payments, setPayments] = useState([]);
   const [contribs, setContribs] = useState([]);
   const [members, setMembers] = useState([]);
@@ -122,9 +122,8 @@ export default function Dashboard() {
   }, [payments, currentPeriod]);
 
   const openContribs = contribs.filter((c) => c.is_active !== false);
-  const committee = members.filter(
-    (m) => m.role === 'admin' || (m.designation && m.designation !== '')
-  );
+  const allMembers = members.filter((m) => m.role === 'member');
+  const committee = allMembers.filter((m) => m.designation && m.designation !== '');
   const today = new Date().toLocaleDateString('en-GB', {
     weekday: 'long',
     day: 'numeric',
@@ -163,18 +162,18 @@ export default function Dashboard() {
             {greeting()}, {member.display_name.split(' ')[0]}
           </h1>
           <p>
-            {today} · {isAdmin ? 'Here is how the group is doing.' : 'Here is where you stand.'}
+            {today} · {isAdmin ? 'Manage members, approvals, and group settings.' : 'Here is where you stand.'}
           </p>
         </div>
         <div className="dash-hero-actions">
-          <Link to="/payments" className="btn">
+          <Link to={isAdmin ? '/admin' : '/payments'} className="btn">
             <Wallet size={16} />
-            {isAdmin ? 'Review payments' : 'My payments'}
+            {isAdmin ? 'Open admin portal' : 'My payments'}
           </Link>
           {isAdmin ? (
-            <Link to="/admin" className="btn ghost">
-              <UserPlus size={16} />
-              Add member
+            <Link to="/members" className="btn ghost">
+              <Users size={16} />
+              Members
             </Link>
           ) : (
             <Link to="/members" className="btn ghost">
@@ -204,8 +203,8 @@ export default function Dashboard() {
             />
             <StatCard
               label="Members"
-              value={members.length}
-              hint={`${members.filter((m) => m.role === 'admin').length} administrators`}
+              value={allMembers.length}
+              hint={`${committee.length} in committee roles`}
               icon={Users}
             />
             <StatCard
@@ -396,12 +395,9 @@ export default function Dashboard() {
                     <Avatar name={m.display_name} className="sm" />
                     <div className="activity-copy">
                       <strong>{m.display_name}</strong>
-                      <span>
-                        {m.designation || (m.role === 'admin' ? 'Administrator' : 'Member')}
-                        {m.role === 'admin' ? ' · Admin' : ''}
-                      </span>
+                      <span>{m.designation || 'Member'}</span>
                     </div>
-                    {m.role === 'admin' && <ShieldCheck size={15} />}
+                    <Crown size={15} />
                   </div>
                 ))}
               </div>

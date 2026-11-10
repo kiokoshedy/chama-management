@@ -35,7 +35,7 @@ export default function Members() {
   const [selected, setSelected] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const isAdmin = member.role === 'admin';
+  const isAdmin = member.role === 'admin' ;
 
   useEffect(() => {
     let cancelled = false;
@@ -70,7 +70,6 @@ export default function Members() {
   const counts = useMemo(
     () => ({
       all: members.length,
-      admins: members.filter((m) => m.role === 'admin').length,
       committee: members.filter((m) => m.designation).length,
     }),
     [members]
@@ -84,10 +83,7 @@ export default function Members() {
         m.display_name.toLowerCase().includes(q) ||
         m.username.toLowerCase().includes(q) ||
         (m.designation || '').toLowerCase().includes(q);
-      const matchesFilter =
-        filter === 'all' ||
-        (filter === 'admins' && m.role === 'admin') ||
-        (filter === 'committee' && Boolean(m.designation));
+      const matchesFilter = filter === 'all' || (filter === 'committee' && Boolean(m.designation));
       return matchesQuery && matchesFilter;
     });
   }, [members, query, filter]);
@@ -241,17 +237,10 @@ export default function Members() {
               </div>
               <div className="badge-row">
                 {m.designation && <span className="badge designation">{m.designation}</span>}
-                {isAdmin ? (
-                  <>
-                    <span className={`badge ${m.role}`}>{m.role}</span>
-                    {m.status && m.status !== 'active' && (
-                      <span className={`badge role-${m.status}`}>
-                        {m.status === 'suspended' ? 'Suspended' : 'Expelled'}
-                      </span>
-                    )}
-                  </>
-                ) : (
-                  m.role === 'admin' && <span className={`badge ${m.role}`}>{m.role}</span>
+                {isAdmin && m.status && m.status !== 'active' && (
+                  <span className={`badge role-${m.status}`}>
+                    {m.status === 'suspended' ? 'Suspended' : 'Expelled'}
+                  </span>
                 )}
               </div>
               {m.bio && <p className="bio">{m.bio}</p>}
@@ -275,9 +264,8 @@ export default function Members() {
                   {m.designation ? ` · ${m.designation}` : ''}
                 </span>
               </div>
-              {m.role === 'admin' && <span className="badge admin">Admin</span>}
               {m.designation && <span className="badge designation">{m.designation}</span>}
-              {isAdmin && m.status !== 'active' && (
+              {isAdmin && m.status && m.status !== 'active' && (
                 <span className={`badge role-${m.status}`}>
                   {m.status === 'suspended' ? 'Suspended' : 'Expelled'}
                 </span>
@@ -306,7 +294,6 @@ function MemberDrawer({ member, isAdmin, onClose }) {
             <p className="muted small">@{member.username}</p>
             <div className="badge-row">
               {member.designation && <span className="badge designation">{member.designation}</span>}
-              {isAdmin && <span className={`badge ${member.role}`}>{member.role}</span>}
               {isAdmin && member.status !== 'active' && (
                 <span className={`badge role-${member.status}`}>
                   {member.status === 'suspended' ? 'Suspended' : 'Expelled'}
@@ -350,7 +337,7 @@ function MemberDrawer({ member, isAdmin, onClose }) {
                 <ShieldCheck size={13} style={{ verticalAlign: '-2px', marginRight: 6 }} />
                 Access
               </dt>
-              <dd>{isAdmin ? member.role : member.role === 'admin' ? 'Administrator' : 'Member'}</dd>
+              <dd>Member</dd>
             </div>
             {member.phone && (
               <div className="detail-row">

@@ -1,9 +1,10 @@
 import jwt from 'jsonwebtoken';
+import { db } from './db.js';
 
 const SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 
 export function signToken(member) {
-  return jwt.sign({ id: member.id, username: member.username, role: member.role }, SECRET, {
+  return jwt.sign({ id: member.id, username: member.username, role: member.role, designation: member.designation || '' }, SECRET, {
     expiresIn: '7d',
   });
 }
@@ -24,9 +25,27 @@ export function requireAuth(req, res, next) {
   }
 }
 
+function isAdminMember(member) {
+  if (!member) return false;
+  if (member.role === 'admin') return true;
+  return false;
+}
+
 export function requireAdmin(req, res, next) {
-  if (req.member?.role !== 'admin') {
+  // Also refresh from DB in case designation/role changed
+  if (req.member?.id) {
+    try {
+      const fresh = db.prepare('SELECT role, designation FROM members WHERE id = ?').get(req.member.id);
+      if (fresh) {
+        req.member.role = fresh.role;
+        req.member.designation = fresh.designation || '';
+      }
+    } catch {}
+  }
+  if (!isAdminMember(req.member)) {
     return res.status(403).json({ error: 'Admin access required' });
   }
   next();
 }
+
+export { isAdminMember };

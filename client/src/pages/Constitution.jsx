@@ -30,7 +30,7 @@ function openUrl(url, name) {
 
 export default function Constitution() {
   const { member } = useAuth();
-  const isAdmin = member.role === 'admin';
+  const isAdmin = member.role === 'admin' ;
 
   const [meta, setMeta] = useState(null);
   const [viewState, setViewState] = useState('idle'); // idle | ready | error

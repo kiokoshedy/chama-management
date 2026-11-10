@@ -119,7 +119,9 @@ export default function Profile() {
           <div>
             <h2>{form.display_name || member.display_name}</h2>
             <div className="profile-meta">
-              <span className={`badge ${member.role}`}>{member.role}</span>
+              <span className={`badge ${member.role === 'admin' ? 'admin' : 'member'}`}>
+                {member.role === 'admin' ? 'Admin' : 'Member'}
+              </span>
               {member.designation && <span className="badge designation">{member.designation}</span>}
               <span className="muted small" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
                 <CalendarDays size={13} />
@@ -133,22 +135,22 @@ export default function Profile() {
           <div className="stat-grid" style={{ marginBottom: 22 }}>
             <StatCard
               label="Total contributed"
-              value={fmt(summary.collected)}
-              hint={`${summary.count} payment records`}
+              value={member.role === 'admin' ? '—' : fmt(summary.collected)}
+              hint={member.role === 'admin' ? 'Admin accounts do not contribute' : `${summary.count} payment records`}
               icon={Wallet}
               tone="green"
             />
             <StatCard
               label="Outstanding"
-              value={fmt(summary.outstanding)}
-              hint="Still to be cleared"
+              value={member.role === 'admin' ? '—' : fmt(summary.outstanding)}
+              hint={member.role === 'admin' ? 'Admin accounts do not contribute' : 'Still to be cleared'}
               icon={CircleAlert}
               tone="amber"
             />
             <StatCard
               label="Access level"
               value={member.role === 'admin' ? 'Admin' : 'Member'}
-              hint={member.designation || 'Regular member'}
+              hint={member.role === 'admin' ? 'Portal management' : member.designation || 'Regular member'}
               icon={ShieldCheck}
               tone="blue"
             />

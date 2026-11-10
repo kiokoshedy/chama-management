@@ -97,7 +97,15 @@ function readProof(value) {
 }
 
 
+// Admin accounts manage the portal and are not group members, so they never
+// carry monthly contribution records.
+function isPayingMember(row) {
+  return row && row.role !== 'admin';
+}
+
 function ensureCurrentPayment(memberId) {
+  const member = db.prepare('SELECT id, role, status FROM members WHERE id = ?').get(memberId);
+  if (!member || member.role === 'admin' || member.status !== 'active') return;
   const amount = Number(getSetting('monthly_amount', '0'));
   if (!(amount > 0)) return;
   const exists = db
@@ -115,13 +123,21 @@ function ensureCurrentPayment(memberId) {
 
 function ensureAllPayments() {
   for (const { id } of db
-    .prepare("SELECT id FROM members WHERE status = 'active'")
+    .prepare("SELECT id FROM members WHERE status = 'active' AND role = 'member'")
     .all()) {
     ensureCurrentPayment(id);
   }
 }
 
 const SMS_REMINDER_DAYS = 5;
+const DESIGNATIONS = [
+  'Chairman',
+  'Vice Chairman',
+  'Secretary',
+  'Treasurer',
+  'Vice Treasurer',
+  'Assistant Secretary',
+];
 const AFRICASTALKING_SMS_URL = {
   live: process.env.AFRICASTALKING_API_URL || 'https://api.africastalking.com/version1/messaging/bulk',
   sandbox:
@@ -302,7 +318,7 @@ const runSmsReminders = async () => {
                 m.id AS member_id, m.display_name, m.phone
          FROM payments p
          JOIN members m ON m.id = p.member_id
-         WHERE p.status = 'unpaid' AND p.due_date IN (?, ?) AND m.status = 'active'`
+         WHERE p.status = 'unpaid' AND p.due_date IN (?, ?) AND m.status = 'active' AND m.role = 'member'`
       )
       .all(reminderDate, catchUpDate);
     for (const row of monthly) {
@@ -326,7 +342,7 @@ const runSmsReminders = async () => {
          CROSS JOIN members m
          LEFT JOIN contribution_payments cp
            ON cp.contribution_id = c.id AND cp.member_id = m.id
-         WHERE c.is_active = 1 AND c.deadline IN (?, ?) AND m.status = 'active'
+         WHERE c.is_active = 1 AND c.deadline IN (?, ?) AND m.status = 'active' AND m.role = 'member'
            AND (cp.id IS NULL OR cp.status NOT IN ('pending', 'approved'))`
       )
       .all(reminderDate, catchUpDate);
@@ -410,19 +426,34 @@ function loadActive(req, res, next) {
   next();
 }
 
+function requireMember(req, res, next) {
+  if (req.member?.role !== 'member') {
+    return res.status(403).json({ error: 'This action is only available to group members' });
+  }
+  next();
+}
+
 const requireActiveUser = [requireAuth, loadActive];
+const requireActiveMember = [requireAuth, loadActive, requireMember];
 const requireActiveAdmin = [requireAuth, loadActive, requireAdmin];
 
 // ---- Members & visibility ----
-// Active members see a list of names only; admin sees full profiles of everyone.
+// Admins manage members via the admin portal. Members see a directory of fellow
+// group members (names/designations only). Admin accounts are not group members.
 
 app.get('/api/members', requireActiveUser, (req, res) => {
-  const rows = db.prepare('SELECT * FROM members ORDER BY display_name COLLATE NOCASE').all();
   if (req.member.role === 'admin') {
-    res.json({ members: rows.map(publicMember) });
-  } else {
-    res.json({ members: rows.filter((r) => r.status === 'active').map(memberName) });
+    const rows = db
+      .prepare("SELECT * FROM members WHERE role = 'member' ORDER BY display_name COLLATE NOCASE")
+      .all();
+    return res.json({ members: rows.map(publicMember) });
   }
+  const rows = db
+    .prepare(
+      "SELECT * FROM members WHERE status = 'active' AND role = 'member' ORDER BY display_name COLLATE NOCASE"
+    )
+    .all();
+  res.json({ members: rows.map(memberName) });
 });
 
 app.get('/api/members/:id', requireActiveUser, (req, res) => {
@@ -714,13 +745,13 @@ app.put('/api/admin/settings', requireActiveAdmin, (req, res) => {
 // admin-set monthly amount. Members paste their transaction confirmation and
 // request approval; admin approves/rejects.
 
-app.post('/api/proof/parse', requireActiveUser, (req, res) => {
+app.post('/api/proof/parse', requireActiveMember, (req, res) => {
   const text = String(req.body?.message ?? '').trim();
   if (!text) return res.json({ parsed: null, warnings: [], max_length: MAX_PROOF_LENGTH });
   res.json({ ...analyzeProof(text), max_length: MAX_PROOF_LENGTH });
 });
 
-app.get('/api/payments/me', requireActiveUser, (req, res) => {
+app.get('/api/payments/me', requireActiveMember, (req, res) => {
   ensureCurrentPayment(req.member.id);
   const rows = db
     .prepare('SELECT * FROM payments WHERE member_id = ? ORDER BY period DESC')
@@ -728,7 +759,7 @@ app.get('/api/payments/me', requireActiveUser, (req, res) => {
   res.json({ payments: rows.map(publicPayment) });
 });
 
-app.post('/api/payments/:id/request', requireActiveUser, (req, res) => {
+app.post('/api/payments/:id/request', requireActiveMember, (req, res) => {
   const payment = db.prepare('SELECT * FROM payments WHERE id = ?').get(req.params.id);
   if (!payment) return res.status(404).json({ error: 'Payment not found' });
   if (payment.member_id !== req.member.id) {
@@ -751,7 +782,7 @@ app.post('/api/payments/:id/request', requireActiveUser, (req, res) => {
 });
 
 // A member can replace the message they pasted while it is still awaiting review.
-app.patch('/api/payments/:id/proof', requireActiveUser, (req, res) => {
+app.patch('/api/payments/:id/proof', requireActiveMember, (req, res) => {
   const payment = db.prepare('SELECT * FROM payments WHERE id = ?').get(req.params.id);
   if (!payment) return res.status(404).json({ error: 'Payment not found' });
   if (payment.member_id !== req.member.id) {
@@ -910,7 +941,7 @@ const fetchMonthlyRows = (period, memberId) =>
     )
     .all(...(memberId ? [period, memberId] : [period]));
 
-// Every active member gets a row, so an unpaid contribution still shows up.
+// Every active group member gets a row, so an unpaid contribution still shows up.
 const fetchSpecialRows = (period, memberId) =>
   db
     .prepare(
@@ -922,7 +953,7 @@ const fetchSpecialRows = (period, memberId) =>
        CROSS JOIN members m
        LEFT JOIN contribution_payments cp
          ON cp.contribution_id = c.id AND cp.member_id = m.id
-       WHERE substr(c.deadline, 1, 7) = ? AND m.status = 'active'${memberId ? ' AND m.id = ?' : ''}
+       WHERE substr(c.deadline, 1, 7) = ? AND m.status = 'active' AND m.role = 'member'${memberId ? ' AND m.id = ?' : ''}
        ORDER BY c.deadline ASC, c.title COLLATE NOCASE, m.display_name COLLATE NOCASE`
     )
     .all(...(memberId ? [period, memberId] : [period]));
@@ -1027,7 +1058,12 @@ app.get('/api/admin/payments/export', requireActiveAdmin, (req, res) => {
   sendMonthCsv(res, period, null, `payments-${period}.csv`);
 });
 
-app.get('/api/payments/me/export', requireActiveUser, (req, res) => {
+app.get('/api/payments/me/export', requireActiveMember, (req, res) => {
+  if (req.member.role === 'admin') {
+    return res
+      .status(403)
+      .json({ error: 'Admin accounts do not make payments. Use a member account for contributions.' });
+  }
   const period = parsePeriod(req.query.period);
   if (!period) return res.status(400).json({ error: 'Pick a month to download (YYYY-MM)' });
   sendMonthCsv(res, period, req.member.id, `my-payments-${period}.csv`);
@@ -1061,7 +1097,7 @@ const publicContribution = (c, mine) => ({
 });
 
 // Open (active) contributions with the calling member's payment status.
-app.get('/api/contributions', requireActiveUser, (req, res) => {
+app.get('/api/contributions', requireActiveMember, (req, res) => {
   const rows = db
     .prepare(
       `SELECT c.*, cp.id AS cp_id
@@ -1085,7 +1121,7 @@ app.get('/api/contributions', requireActiveUser, (req, res) => {
 });
 
 // Member pastes their confirmation, which moves the payment to 'pending'.
-app.post('/api/contributions/:id/pay', requireActiveUser, (req, res) => {
+app.post('/api/contributions/:id/pay', requireActiveMember, (req, res) => {
   const c = db
     .prepare('SELECT * FROM contributions WHERE id = ? AND is_active = 1')
     .get(req.params.id);
@@ -1115,7 +1151,7 @@ app.post('/api/contributions/:id/pay', requireActiveUser, (req, res) => {
 });
 
 // Replace the pasted message while it is still awaiting approval.
-app.patch('/api/contributions/:id/proof', requireActiveUser, (req, res) => {
+app.patch('/api/contributions/:id/proof', requireActiveMember, (req, res) => {
   const c = db
     .prepare('SELECT * FROM contributions WHERE id = ? AND is_active = 1')
     .get(req.params.id);
@@ -1139,7 +1175,7 @@ app.patch('/api/contributions/:id/proof', requireActiveUser, (req, res) => {
 });
 
 // Member withdraws their "I have paid" while it is still awaiting approval.
-app.post('/api/contributions/:id/cancel', requireActiveUser, (req, res) => {
+app.post('/api/contributions/:id/cancel', requireActiveMember, (req, res) => {
   const c = db
     .prepare('SELECT * FROM contributions WHERE id = ? AND is_active = 1')
     .get(req.params.id);
@@ -1344,7 +1380,7 @@ app.post('/api/admin/members', requireActiveAdmin, (req, res) => {
   if (taken) return res.status(409).json({ error: 'Username already taken' });
 
   const targetRole = role === 'admin' ? 'admin' : 'member';
-  const targetDesignation = DESIGNATIONS.includes(designation) ? designation : '';
+  const targetDesignation = targetRole === 'member' && DESIGNATIONS.includes(designation) ? designation : '';
   const normalizedPhone = normalizeKenyanPhone(phone);
   if (normalizedPhone === null) {
     return res.status(400).json({ error: 'Enter a valid Kenyan mobile number, e.g. 0712345678' });
@@ -1364,29 +1400,15 @@ app.post('/api/admin/members', requireActiveAdmin, (req, res) => {
       targetDesignation
     );
 
-  ensureCurrentPayment(info.lastInsertRowid);
+  if (targetRole === 'member') ensureCurrentPayment(info.lastInsertRowid);
   const member = db.prepare('SELECT * FROM members WHERE id = ?').get(info.lastInsertRowid);
   res.status(201).json({ member: publicMember(member) });
-});
-
-app.patch('/api/admin/members/:id/role', requireActiveAdmin, (req, res) => {
-  const { role } = req.body || {};
-  if (!['member', 'admin'].includes(role)) {
-    return res.status(400).json({ error: 'Role must be member or admin' });
-  }
-  const target = db.prepare('SELECT * FROM members WHERE id = ?').get(req.params.id);
-  if (!target) return res.status(404).json({ error: 'Member not found' });
-  if (Number(req.params.id) === req.member.id && role !== 'admin') {
-    return res.status(400).json({ error: 'You cannot demote yourself' });
-  }
-  db.prepare('UPDATE members SET role = ? WHERE id = ?').run(role, target.id);
-  const updated = db.prepare('SELECT * FROM members WHERE id = ?').get(target.id);
-  res.json({ member: publicMember(updated) });
 });
 
 app.patch('/api/admin/members/:id/phone', requireActiveAdmin, (req, res) => {
   const target = db.prepare('SELECT * FROM members WHERE id = ?').get(req.params.id);
   if (!target) return res.status(404).json({ error: 'Member not found' });
+  if (target.role === 'admin') return res.status(400).json({ error: 'Admin accounts are managed separately from members' });
   const normalized = normalizeKenyanPhone(req.body?.phone);
   if (normalized === null) {
     return res.status(400).json({ error: 'Enter a valid Kenyan mobile number, e.g. 0712345678' });
@@ -1398,15 +1420,6 @@ app.patch('/api/admin/members/:id/phone', requireActiveAdmin, (req, res) => {
 
 const MEMBER_STATUSES = ['active', 'suspended', 'expelled'];
 const MAX_STATUS_REASON_LENGTH = 500;
-
-const DESIGNATIONS = [
-  'Chairman',
-  'Vice Chairman',
-  'Secretary',
-  'Treasurer',
-  'Vice Treasurer',
-  'Assistant Secretary',
-];
 
 // Suspend, expel, or reactivate a member. Accounts are never deleted.
 // Suspending or expelling requires a reason: it is stored on the member and
@@ -1431,9 +1444,12 @@ app.patch('/api/admin/members/:id/status', requireActiveAdmin, (req, res) => {
   }
   const target = db.prepare('SELECT * FROM members WHERE id = ?').get(req.params.id);
   if (!target) return res.status(404).json({ error: 'Member not found' });
+  if (target.role === 'admin') {
+    return res.status(400).json({ error: 'Admin accounts are managed separately from member status actions' });
+  }
   if (target.status === 'active' && status !== 'active') {
     const active = db
-      .prepare("SELECT COUNT(*) AS count FROM members WHERE status = 'active'")
+      .prepare("SELECT COUNT(*) AS count FROM members WHERE status = 'active' AND role = 'member'")
       .get();
     if (active.count <= 1) {
       return res.status(400).json({ error: 'Cannot remove the last active member' });
@@ -1441,6 +1457,7 @@ app.patch('/api/admin/members/:id/status', requireActiveAdmin, (req, res) => {
   }
   if (status === 'active') {
     db.prepare("UPDATE members SET status = 'active', status_reason = '' WHERE id = ?").run(target.id);
+    ensureCurrentPayment(target.id);
     // Reactivating resolves any appeal that was still waiting on this member.
     db.prepare(
       "UPDATE appeals SET status = 'approved', response = ?, decided_by = ?, decided_at = datetime('now') WHERE member_id = ? AND status = 'pending'"
@@ -1556,6 +1573,7 @@ app.patch('/api/admin/members/:id/designation', requireActiveAdmin, (req, res) =
   }
   const target = db.prepare('SELECT * FROM members WHERE id = ?').get(req.params.id);
   if (!target) return res.status(404).json({ error: 'Member not found' });
+  if (target.role === 'admin') return res.status(400).json({ error: 'Designations apply to group members only' });
   db.prepare('UPDATE members SET designation = ? WHERE id = ?').run(next, target.id);
   const updated = db.prepare('SELECT * FROM members WHERE id = ?').get(target.id);
   res.json({ member: publicMember(updated) });

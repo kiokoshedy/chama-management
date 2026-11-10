@@ -47,7 +47,7 @@ const emptyForm = () => ({
 
 export default function Minutes() {
   const { member } = useAuth();
-  const isAdmin = member.role === 'admin';
+  const isAdmin = member.role === 'admin' ;
 
   const [minutes, setMinutes] = useState([]);
   const [loading, setLoading] = useState(true);

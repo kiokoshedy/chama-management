@@ -55,7 +55,7 @@ const NAV = [
   {
     label: 'Group',
     items: [
-      { to: '/payments', label: 'Payments', icon: Wallet },
+      { to: '/payments', label: 'Payments', icon: Wallet, memberOnly: true },
       { to: '/minutes', label: 'Minutes', icon: NotebookText },
       { to: '/constitution', label: 'Constitution', icon: ScrollText },
     ],
@@ -201,15 +201,17 @@ function Shell({ member, logout }) {
   const navigate = useNavigate();
   const { isDark, toggle } = useTheme();
   const closeNav = () => setNavOpen(false);
+  const isAdmin = member.role === 'admin';
 
   const current = TITLES.find((t) => t.test(location.pathname)) || {
     label: 'Group Hub',
     crumb: '',
   };
 
+  const isAdminMember = (m) => m?.role === 'admin';
   // Admin badge: how many payment requests are waiting for a decision.
   useEffect(() => {
-    if (member.role !== 'admin') return undefined;
+    if (!isAdminMember(member)) return undefined;
     let cancelled = false;
     api
       .adminPayments()
@@ -221,7 +223,7 @@ function Shell({ member, logout }) {
     return () => {
       cancelled = true;
     };
-  }, [member.role, location.pathname]);
+  }, [member.role, member.designation, location.pathname]);
 
   const submitSearch = (e) => {
     e.preventDefault();
@@ -246,25 +248,29 @@ function Shell({ member, logout }) {
         </div>
 
         <nav className="sidebar-nav">
-          {NAV.map((group) => (
-            <div key={group.label}>
-              <div className="nav-label">{group.label}</div>
-              {group.items.map(({ to, label, icon: Icon, end }) => (
-                <NavLink
-                  key={to}
-                  to={to}
-                  end={end}
-                  className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
-                  onClick={closeNav}
-                >
-                  <Icon size={18} />
-                  {label}
-                </NavLink>
-              ))}
-            </div>
-          ))}
+          {NAV.map((group) => {
+            const items = group.items.filter((item) => !item.memberOnly || !isAdmin);
+            if (items.length === 0) return null;
+            return (
+              <div key={group.label}>
+                <div className="nav-label">{group.label}</div>
+                {items.map(({ to, label, icon: Icon, end }) => (
+                  <NavLink
+                    key={to}
+                    to={to}
+                    end={end}
+                    className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+                    onClick={closeNav}
+                  >
+                    <Icon size={18} />
+                    {label}
+                  </NavLink>
+                ))}
+              </div>
+            );
+          })}
 
-          {member.role === 'admin' && (
+          {isAdmin && (
             <div>
               <div className="nav-label">Administration</div>
               <NavLink
@@ -328,7 +334,7 @@ function Shell({ member, logout }) {
 
             <span className="topbar-chip hide-sm">
               <span className="status-dot" />
-              {member.role === 'admin' ? 'Administrator' : 'Member'}
+              {isAdmin ? 'Administrator' : 'Member'}
             </span>
 
             <UserMenu member={member} logout={logout} />
@@ -344,7 +350,8 @@ function Shell({ member, logout }) {
               <Route path="/minutes" element={<Minutes />} />
               <Route path="/constitution" element={<Constitution />} />
               <Route path="/profile" element={<Profile />} />
-              {member.role === 'admin' && <Route path="/admin" element={<Admin />} />}
+              {isAdmin && <Route path="/admin" element={<Admin />} />}
+              {!isAdmin && <Route path="/admin" element={<Navigate to="/" replace />} />}
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </div>

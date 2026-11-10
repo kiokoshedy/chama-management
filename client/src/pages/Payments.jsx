@@ -441,8 +441,24 @@ function MemberContribs({ contribs, busyId, onPay, onCancel, onEditProof, onView
 
 export default function Payments() {
   const { member } = useAuth();
-  const isAdmin = member.role === 'admin';
-  return isAdmin ? <AdminPayments /> : <MemberPayments />;
+  if (member.role === 'admin') {
+    return (
+      <div>
+        <div className="page-header">
+          <div>
+            <h1>Payments</h1>
+            <p className="page-sub">
+              Admin accounts manage member payments from the admin portal and do not have member payment records.
+            </p>
+          </div>
+          <a className="btn ghost" href="/admin">
+            Go to Admin
+          </a>
+        </div>
+      </div>
+    );
+  }
+  return <MemberPayments />;
 }
 
 function MemberPayments() {

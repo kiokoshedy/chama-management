@@ -1,5 +1,10 @@
 import { useEffect, useState } from 'react';
-import { UserPlus, Coins, ShieldCheck, Loader2, PauseCircle, UserX, RotateCcw, KeyRound, FileText, Eye, CalendarClock, HardDrive, CloudUpload, LinkIcon, ExternalLink, UserCheck, Phone, Send, X, TriangleAlert, CheckCircle2, XCircle, MessageSquareText, NotebookText } from 'lucide-react';
+import {
+  UserPlus, Coins, ShieldCheck, Loader2, PauseCircle, UserX, RotateCcw,
+  KeyRound, FileText, Eye, CalendarClock, HardDrive, CloudUpload, LinkIcon,
+  ExternalLink, UserCheck, Phone, Send, X, TriangleAlert, CheckCircle2,
+  XCircle, MessageSquareText, NotebookText
+} from 'lucide-react';
 import { api } from '../api.js';
 import { fmt, currency, fmtBytes, fmtDate, fmtDateShort } from '../format.js';
 import { Avatar } from '../App.jsx';
@@ -12,12 +17,10 @@ const emptyForm = {
   display_name: '',
   bio: '',
   phone: '',
-  role: 'member',
   designation: '',
 };
 
 const STATUS_LABEL = { active: 'Active', suspended: 'Suspended', expelled: 'Expelled' };
-
 const APPEAL_LABEL = { pending: 'Pending', approved: 'Approved', declined: 'Declined' };
 
 const DESIGNATIONS = [
@@ -30,7 +33,8 @@ const DESIGNATIONS = [
 ];
 
 export default function Admin() {
-  const { member: me } = useAuth();
+  const { me } = useAuth();
+
   const [members, setMembers] = useState([]);
   const [phoneDrafts, setPhoneDrafts] = useState({});
   const [form, setForm] = useState(emptyForm);
@@ -55,15 +59,22 @@ export default function Admin() {
   const [modalBusy, setModalBusy] = useState(false);
 
   const load = async () => {
-    const [{ members }, { monthly_amount }, smsStatus, { reminders }, { appeals: appealsList }, { minutes: minutesList }] =
-      await Promise.all([
-        api.members(),
-        api.settings(),
-        api.smsStatus(),
-        api.smsReminders(),
-        api.adminAppeals(),
-        api.minutes(),
-      ]);
+    const [
+      { members },
+      { monthly_amount },
+      smsStatus,
+      { reminders },
+      { appeals: appealsList },
+      { minutes: minutesList },
+    ] = await Promise.all([
+      api.members(),
+      api.settings(),
+      api.smsStatus(),
+      api.smsReminders(),
+      api.adminAppeals(),
+      api.minutes(),
+    ]);
+
     setMembers(members);
     setPhoneDrafts(Object.fromEntries(members.map((m) => [m.id, m.phone || ''])));
     setMonthly(monthly_amount);
@@ -71,8 +82,10 @@ export default function Admin() {
     setSmsHistory(reminders);
     setAppeals(appealsList);
     setMinutes(minutesList);
+
     const doc = await api.constitution();
     setConstitution(doc);
+
     if (doc.exists) {
       try {
         const { blob } = await api.constitutionFile();
@@ -117,9 +130,11 @@ export default function Admin() {
     setSuccess('');
     setCreating(true);
     try {
-      await api.createMember(form);
+      await api.createMember({ ...form, role: 'member' });
       setForm(emptyForm);
-      setSuccess(`Member "${form.username}" created — share these credentials with them.`);
+      setSuccess(
+        `Member account "${form.username}" created. Share these credentials with them. If you need a separate admin account, create it with a different username.`
+      );
       await load();
     } catch (err) {
       setError(err.message);
@@ -139,13 +154,6 @@ export default function Admin() {
     } catch (err) {
       setError(err.message);
     }
-  };
-
-  const setRole = async (id, role) => {
-    setError('');
-    setSuccess('');
-    await api.setRole(id, role);
-    await load();
   };
 
   const setDesignation = async (id, designation) => {
@@ -185,7 +193,7 @@ export default function Admin() {
   const runSmsCheck = async () => {
     if (
       sms?.environment === 'live' &&
-      !window.confirm('Send all eligible SMS reminders now using the live Africa’s Talking account?')
+      !window.confirm("Send all eligible SMS reminders now using the live Africa’s Talking account?")
     ) {
       return;
     }
@@ -269,7 +277,7 @@ export default function Admin() {
         <div>
           <h1>Admin dashboard</h1>
           <p className="page-sub">
-            Manage accounts, roles, and the monthly contribution setting.
+            Manage member accounts and portal settings. Admin accounts are separate from group members.
           </p>
         </div>
       </div>
@@ -296,7 +304,9 @@ export default function Admin() {
               </span>
               <div>
                 <h2>Add member</h2>
-                <p className="muted small">Create an account and share the credentials.</p>
+                <p className="muted small">
+                  Create a member account and share the credentials. Admin accounts are separate and do not take part as group members.
+                </p>
               </div>
             </div>
           </div>
@@ -317,11 +327,16 @@ export default function Admin() {
                 <input name="password" type="password" value={form.password} onChange={change} placeholder="Temporary password" required />
               </div>
               <div className="field">
-                <label>Role</label>
-                <select name="role" value={form.role} onChange={change}>
-                  <option value="member">Member</option>
-                  <option value="admin">Admin</option>
-                </select>
+                <label>Mobile number (optional)</label>
+                <input
+                  name="phone"
+                  type="tel"
+                  value={form.phone}
+                  onChange={change}
+                  placeholder="0712345678"
+                  autoComplete="tel"
+                />
+                <span className="field-hint">Used for contribution reminders.</span>
               </div>
             </div>
             <div className="field">
@@ -329,23 +344,9 @@ export default function Admin() {
               <select name="designation" value={form.designation} onChange={change}>
                 <option value="">No designation</option>
                 {DESIGNATIONS.map((d) => (
-                  <option key={d} value={d}>
-                    {d}
-                  </option>
+                  <option key={d} value={d}>{d}</option>
                 ))}
               </select>
-            </div>
-            <div className="field">
-              <label>Mobile number (optional)</label>
-              <input
-                name="phone"
-                type="tel"
-                value={form.phone}
-                onChange={change}
-                placeholder="0712345678"
-                autoComplete="tel"
-              />
-              <span className="field-hint">Used for contribution reminders.</span>
             </div>
             <div className="field">
               <label>Bio (optional)</label>
@@ -398,6 +399,7 @@ export default function Admin() {
         </form>
       </div>
 
+      {/* SMS reminders card */}
       <div className="card pad wide sms-admin-card">
         <div className="card-title-row">
           <span className="icon-tile green">
@@ -458,6 +460,7 @@ export default function Admin() {
         )}
       </div>
 
+      {/* Constitution card */}
       <div className="card pad wide constitution-root-card">
         <div className="constitution-toolbar" style={{ borderBottom: 'none', padding: 0 }}>
           <div className="card-title-row">
@@ -466,14 +469,10 @@ export default function Admin() {
             </span>
             <div>
               <h2>Constitution</h2>
-              <p className="muted small">
-                The group's governing document, published on the Constitution page.
-              </p>
+              <p className="muted small">The group's governing document, published on the Constitution page.</p>
             </div>
             {constitution?.exists && (
-              <span className="badge member" style={{ marginLeft: 'auto' }}>
-                Published
-              </span>
+              <span className="badge member" style={{ marginLeft: 'auto' }}>Published</span>
             )}
           </div>
           {constitution?.exists ? (
@@ -518,13 +517,13 @@ export default function Admin() {
           ) : (
             <div className="alert info" style={{ marginBottom: 0 }}>
               <LinkIcon size={17} />
-              No constitution has been uploaded yet. Members will see the Constitution page empty
-              until you publish one.
+              No constitution has been uploaded yet. Members will see the Constitution page empty until you publish one.
             </div>
           )}
         </div>
       </div>
 
+      {/* Meeting minutes card */}
       <div className="card pad wide minutes-admin-card">
         <div className="card-title-row">
           <span className="icon-tile blue">
@@ -532,9 +531,7 @@ export default function Admin() {
           </span>
           <div>
             <h2>Meeting minutes</h2>
-            <p className="muted small">
-              Minutes published to members after each group meeting.
-            </p>
+            <p className="muted small">Minutes published to members after each group meeting.</p>
           </div>
           <span className="badge member" style={{ marginLeft: 'auto' }}>
             {minutes.length} published
@@ -544,8 +541,7 @@ export default function Admin() {
           {minutes.length === 0 ? (
             <div className="alert info" style={{ marginBottom: 0 }}>
               <NotebookText size={17} />
-              No minutes have been published yet. Upload the record of your next meeting so members
-              can read it.
+              No minutes have been published yet. Upload the record of your next meeting so members can read it.
             </div>
           ) : (
             <div className="minutes-admin-list">
@@ -571,6 +567,7 @@ export default function Admin() {
         </div>
       </div>
 
+      {/* Appeals card */}
       <div className="card pad wide appeals-card">
         <div className="card-title-row">
           <span className="icon-tile amber">
@@ -579,8 +576,7 @@ export default function Admin() {
           <div>
             <h2>Appeals</h2>
             <p className="muted small">
-              Suspended or expelled members can ask for a review. Approving an appeal reactivates
-              the member.
+              Suspended or expelled members can ask for a review. Approving an appeal reactivates the member.
             </p>
           </div>
           {pendingAppeals > 0 && (
@@ -658,7 +654,7 @@ export default function Admin() {
               </div>
             </div>
             <div className="badge-row">
-              <span className={`badge ${m.role}`}>{m.role}</span>
+              <span className="badge member">member</span>
               {m.designation && <span className="badge designation">{m.designation}</span>}
               {m.status !== 'active' && (
                 <span className={`badge role-${m.status}`}>{STATUS_LABEL[m.status]}</span>
@@ -690,15 +686,6 @@ export default function Admin() {
             </div>
             <div className="actions">
               <select
-                value={m.role}
-                disabled={busyId === m.id || m.id === me.id}
-                onChange={(e) => setRole(m.id, e.target.value)}
-                aria-label="Role"
-              >
-                <option value="member">Member</option>
-                <option value="admin">Admin</option>
-              </select>
-              <select
                 value={m.designation || ''}
                 disabled={busyId === m.id}
                 onChange={(e) => setDesignation(m.id, e.target.value)}
@@ -707,9 +694,7 @@ export default function Admin() {
               >
                 <option value="">No designation</option>
                 {DESIGNATIONS.map((d) => (
-                  <option key={d} value={d}>
-                    {d}
-                  </option>
+                  <option key={d} value={d}>{d}</option>
                 ))}
               </select>
               {busyId === m.id ? (
@@ -718,7 +703,6 @@ export default function Admin() {
                 <>
                   <button
                     className="btn ghost-yet sm"
-                    disabled={m.id === me.id}
                     title="Temporarily block sign-in"
                     onClick={() => requestStatus(m.id, 'suspended', m.display_name)}
                   >
@@ -727,7 +711,6 @@ export default function Admin() {
                   </button>
                   <button
                     className="btn danger sm"
-                    disabled={m.id === me.id}
                     title="Revoke group membership"
                     onClick={() => requestStatus(m.id, 'expelled', m.display_name)}
                   >
@@ -748,10 +731,10 @@ export default function Admin() {
 
       <div className="manage-note">
         <KeyRound size={15} />
-        Accounts are never deleted. Suspended members can be reactivated; expelled members can be
-        brought back at any time from here.
+        Member accounts are never deleted. Admin accounts are separate from group members; if someone is both, keep two accounts (one admin, one member).
       </div>
 
+      {/* Status modal */}
       {statusModal && (
         <div
           className="modal-backdrop"
@@ -792,8 +775,7 @@ export default function Admin() {
                   autoFocus
                 />
                 <span className="field-hint">
-                  This appears the moment {statusModal.name} tries to sign in, and they can appeal
-                  the decision from there.
+                  This appears the moment {statusModal.name} tries to sign in, and they can appeal the decision from there.
                 </span>
               </div>
               <div className="modal-actions">
@@ -820,6 +802,7 @@ export default function Admin() {
         </div>
       )}
 
+      {/* Appeal modal */}
       {appealModal && (
         <div
           className="modal-backdrop"
