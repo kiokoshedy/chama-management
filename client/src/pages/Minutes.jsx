@@ -12,6 +12,7 @@ import {
   TriangleAlert,
   CheckCircle2,
   UserRound,
+  X,
 } from 'lucide-react';
 import { api } from '../api.js';
 import { useAuth } from '../context/AuthContext.jsx';
@@ -59,6 +60,9 @@ export default function Minutes() {
   const [uploadError, setUploadError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(null);
+  const [viewMinute, setViewMinute] = useState(null);
+  const [viewUrl, setViewUrl] = useState(null);
+  const [viewBusy, setViewBusy] = useState(false);
   const fileInput = useRef(null);
   const urls = useRef([]);
 
@@ -83,6 +87,7 @@ export default function Minutes() {
       cancelled = true;
       urls.current.forEach((url) => URL.revokeObjectURL(url));
       urls.current = [];
+      if (viewUrl) URL.revokeObjectURL(viewUrl);
     };
   }, []);
 
@@ -146,17 +151,26 @@ export default function Minutes() {
   };
 
   const view = async (minute) => {
-    setBusy({ id: minute.id, action: 'view' });
     setError('');
+    setViewBusy(true);
     try {
+      if (viewUrl) URL.revokeObjectURL(viewUrl);
       const { blob } = await api.minutesFile(minute.id);
       const url = URL.createObjectURL(blob);
-      urls.current.push(url);
-      window.open(url, '_blank', 'noopener');
+      setViewUrl(url);
+      setViewMinute(minute);
     } catch (err) {
       setError(err.message);
     } finally {
-      setBusy(null);
+      setViewBusy(false);
+    }
+  };
+
+  const closeView = () => {
+    setViewMinute(null);
+    if (viewUrl) {
+      URL.revokeObjectURL(viewUrl);
+      setViewUrl(null);
     }
   };
 
@@ -379,7 +393,7 @@ export default function Minutes() {
           {minutes.map((minute) => {
             const date = monthDay(minute.meeting_date);
             const pdf = isPdf(minute);
-            const viewing = busy?.id === minute.id && busy.action === 'view';
+            const viewing = viewMinute?.id === minute.id;
             const downloading = busy?.id === minute.id && busy.action === 'download';
             const deleting = busy?.id === minute.id && busy.action === 'delete';
             return (
@@ -432,7 +446,7 @@ export default function Minutes() {
                       onClick={() => view(minute)}
                       disabled={viewing || deleting}
                     >
-                      {viewing ? <Loader2 size={14} className="spin-ico" /> : <Eye size={14} />}
+                      {viewing ? <Eye size={14} className="spin-ico" /> : <Eye size={14} />}
                       View
                     </button>
                   )}
@@ -470,6 +484,63 @@ export default function Minutes() {
         <FileText size={13} />
         Minutes are published by the group administration and are available to all active members.
       </p>
+
+      {viewMinute && (
+        <div className="card pad wide minute-view-panel" style={{ marginTop: 18, padding: 0 }}>
+          <div className="constitution-toolbar" style={{ borderBottom: 'none', padding: 0 }}>
+            <div className="card-title-row">
+              <div>
+                <h2>Viewing minutes</h2>
+                <p className="muted small">
+                  {viewMinute.title} · {fmtDateShort(viewMinute.meeting_date)}
+                </p>
+              </div>
+              <button className="icon-btn" onClick={closeView} aria-label="Close view">
+                <X size={17} />
+              </button>
+            </div>
+          </div>
+          <div style={{ padding: 16, height: '70vh', overflow: 'auto', background: '#fff' }}>
+            {isPdf(viewMinute) && viewUrl ? (
+              <iframe
+                className="pdf-frame"
+                title={viewMinute.name}
+                src={viewUrl}
+                style={{ width: '100%', height: '100%', border: 0 }}
+                loading="lazy"
+              />
+            ) : (
+              <div className="empty-state wide" style={{ height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center' }}>
+                <FileText size={32} />
+                <h3>Inline preview not available</h3>
+                <p>This document type cannot be previewed directly. Download it to open.</p>
+                <button className="btn" onClick={() => download(viewMinute)}>
+                  <Download size={16} />
+                  Download
+                </button>
+              </div>
+            )}
+          </div>
+          {isPdf(viewMinute) && viewUrl && (
+            <div className="card-title-row" style={{ padding: '10px 16px', borderTop: '1px solid var(--border)', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <strong>{viewMinute.name}</strong>
+                <span className="muted small">
+                  {fmtBytes(viewMinute.size)} · {viewMinute.mime || 'document'}
+                </span>
+              </div>
+              <button className="btn ghost" onClick={() => download(viewMinute)}>
+                <Download size={15} />
+                Download
+              </button>
+              <button className="btn" onClick={closeView}>
+                <X size={15} />
+                Close
+              </button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -3,7 +3,8 @@ import {
   UserPlus, Coins, ShieldCheck, Loader2, PauseCircle, UserX, RotateCcw,
   KeyRound, FileText, Eye, CalendarClock, HardDrive, CloudUpload, LinkIcon,
   ExternalLink, UserCheck, Phone, Send, X, TriangleAlert, CheckCircle2,
-  XCircle, MessageSquareText, NotebookText
+  XCircle, MessageSquareText, NotebookText, HandCoins, Plus, Undo2, ReceiptText,
+  ChevronDown, ChevronUp
 } from 'lucide-react';
 import { api } from '../api.js';
 import { fmt, currency, fmtBytes, fmtDate, fmtDateShort } from '../format.js';
@@ -51,6 +52,16 @@ export default function Admin() {
   const [constUrl, setConstUrl] = useState(null);
   const [constBusy, setConstBusy] = useState(false);
   const [minutes, setMinutes] = useState([]);
+  const [contribs, setContribs] = useState([]);
+  const [contribForm, setContribForm] = useState({ title: '', description: '', amount: '', deadline: '' });
+  const [creatingContrib, setCreatingContrib] = useState(false);
+  const [openedContrib, setOpenedContrib] = useState(null);
+  const [contribDeadlineDrafts, setContribDeadlineDrafts] = useState({});
+  const [busyContribDeadline, setBusyContribDeadline] = useState(null);
+  const [contribMsg, setContribMsg] = useState('');
+  const [contribErr, setContribErr] = useState('');
+  const [busyContrib, setBusyContrib] = useState(null);
+  const [proofViewContrib, setProofViewContrib] = useState(null);
   const [appeals, setAppeals] = useState([]);
   const [statusModal, setStatusModal] = useState(null);
   const [reason, setReason] = useState('');
@@ -66,6 +77,7 @@ export default function Admin() {
       { reminders },
       { appeals: appealsList },
       { minutes: minutesList },
+      { contributions: contribsList },
     ] = await Promise.all([
       api.members(),
       api.settings(),
@@ -73,6 +85,7 @@ export default function Admin() {
       api.smsReminders(),
       api.adminAppeals(),
       api.minutes(),
+      api.adminContributions(),
     ]);
 
     setMembers(members);
@@ -82,6 +95,7 @@ export default function Admin() {
     setSmsHistory(reminders);
     setAppeals(appealsList);
     setMinutes(minutesList);
+    setContribs(contribsList);
 
     const doc = await api.constitution();
     setConstitution(doc);
@@ -173,6 +187,100 @@ export default function Admin() {
     } finally {
       setBusyId(null);
     }
+  };
+
+  const todayInKenyaStr = () => new Date().toISOString().slice(0, 10);
+
+  const createContrib = async (e) => {
+    e.preventDefault();
+    setContribErr('');
+    setContribMsg('');
+    setCreatingContrib(true);
+    try {
+      await api.createContribution({
+        title: String(contribForm.title).trim(),
+        description: String(contribForm.description || '').trim(),
+        amount: Number(contribForm.amount),
+        deadline: contribForm.deadline,
+      });
+      setContribForm({ title: '', description: '', amount: '', deadline: todayInKenyaStr() });
+      setContribMsg(`Special contribution “${contribForm.title}” created and visible to every member.`);
+      await load();
+    } catch (err) {
+      setContribErr(err.message);
+    } finally {
+      setCreatingContrib(false);
+    }
+  };
+
+  const changeContrib = (e) => setContribForm({ ...contribForm, [e.target.name]: e.target.value });
+
+  const toggleContribActive = async (c) => {
+    setContribErr('');
+    setContribMsg('');
+    setBusyContrib(`t-${c.id}`);
+    try {
+      await api.updateContribution(c.id, { is_active: !c.is_active });
+      setContribMsg(
+        c.is_active ? `"${c.title}" is now closed.` : `"${c.title}" is now open.`
+      );
+      await load();
+    } catch (err) {
+      setContribErr(err.message);
+    } finally {
+      setBusyContrib(null);
+    }
+  };
+
+  const approveContribPayment = async (cid, pid, name) => {
+    setContribErr('');
+    setContribMsg('');
+    setBusyContrib(pid);
+    try {
+      await api.approveContributionPayment(cid, pid);
+      setContribMsg(`${name}'s contribution payment approved.`);
+      await load();
+    } catch (err) {
+      setContribErr(err.message);
+    } finally {
+      setBusyContrib(null);
+    }
+  };
+
+  const resetContribPayment = async (cid, pid, name) => {
+    setContribErr('');
+    setContribMsg('');
+    setBusyContrib(pid);
+    try {
+      await api.resetContributionPayment(cid, pid);
+      setContribMsg(`${name}'s contribution payment has been cleared (they can pay again).`);
+      await load();
+    } catch (err) {
+      setContribErr(err.message);
+    } finally {
+      setBusyContrib(null);
+    }
+  };
+
+  const saveContribDeadline = async (c) => {
+    const value = contribDeadlineDrafts[c.id] || '';
+    if (!value) return setContribErr('A contribution deadline is required.');
+    setContribErr('');
+    setContribMsg('');
+    setBusyContribDeadline(c.id);
+    try {
+      await api.updateContribution(c.id, { deadline: value });
+      setContribMsg(`Deadline updated for "${c.title}".`);
+      await load();
+    } catch (err) {
+      setContribErr(err.message);
+    } finally {
+      setBusyContribDeadline(null);
+    }
+  };
+
+  const closeProofViewContrib = () => {
+    setProofViewContrib(null);
   };
 
   const setPhone = async (id) => {
@@ -642,6 +750,208 @@ export default function Admin() {
         )}
       </div>
 
+      {/* Special contributions */}
+      <div className="card pad wide contrib-admin-root" style={{ marginBottom: 24 }}>
+        <div className="section-head">
+          <span className="icon-tile amber">
+            <HandCoins size={18} />
+          </span>
+          <div>
+            <h2 className="section-title">Special contributions</h2>
+            <p className="muted small">
+              One-off collections (weddings, harambees, sick support, functions…). Create one and it
+              appears on every member's dashboard with its deadline; approve each member's payment here.
+            </p>
+          </div>
+        </div>
+
+        {contribErr && (
+          <div className="alert error" style={{ marginTop: 14 }}>
+            <ShieldCheck size={17} />
+            {contribErr}
+          </div>
+        )}
+        {contribMsg && (
+          <div className="alert success" style={{ marginTop: 14 }}>
+            <ShieldCheck size={17} />
+            {contribMsg}
+          </div>
+        )}
+
+        <form className="contrib-create" onSubmit={createContrib} style={{ marginTop: 16, display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 10 }}>
+          <div className="field">
+            <label>Title</label>
+            <input name="title" value={contribForm.title} onChange={changeContrib} placeholder="e.g. John Doe sick. " required />
+          </div>
+          <div className="field">
+            <label>Amount ({currency})</label>
+            <input name="amount" type="number" min="1" step="any" value={contribForm.amount} onChange={changeContrib} placeholder="2000" required />
+          </div>
+          <div className="field">
+            <label>Payment deadline</label>
+            <input name="deadline" type="date" min={todayInKenyaStr()} value={contribForm.deadline} onChange={changeContrib} required />
+          </div>
+          <div className="field">
+            <label>Description (optional)</label>
+            <input name="description" value={contribForm.description} onChange={changeContrib} placeholder="What this collection is for…" />
+          </div>
+          <button
+            className="btn"
+            style={{ gridColumn: '1 / -1', alignSelf: 'end' }}
+            disabled={creatingContrib}
+          >
+            {creatingContrib ? (
+              <>
+                <Loader2 size={16} className="spinner" style={{ position: 'static', borderColor: 'rgba(255,255,255,.35)', borderTopColor: '#fff' }} />
+                Creating…
+              </>
+            ) : (
+              <>
+                <Plus size={16} />
+                Create contribution
+              </>
+            )}
+          </button>
+        </form>
+
+        {contribs.length === 0 ? (
+          <div className="empty-state" style={{ marginTop: 20, padding: '28px 20px' }}>
+            <div className="icon-tile">
+              <HandCoins size={22} />
+            </div>
+            <h3>No contributions yet</h3>
+            <p>Create the first one above — it will show up on every member's dashboard immediately.</p>
+          </div>
+        ) : (
+          <div className="contrib-admin-list">
+            {contribs
+              .slice()
+              .sort((a, b) => {
+                const aa = new Date(a.created_at || 0).getTime();
+                const bb = new Date(b.created_at || 0).getTime();
+                return bb - aa;
+              })
+              .map((c) => {
+              const isOpen = openedContrib === c.id;
+              return (
+                <div className="contrib-admin-card" key={c.id}>
+                  <div className="contrib-main">
+                    <div className="contrib-title-row">
+                      <strong className="contrib-title">{c.title}</strong>
+                      <span className={`badge ${c.is_active ? 'member' : 'pending'}`}>
+                        {c.is_active ? 'Open' : 'Closed'}
+                      </span>
+                    </div>
+                    {c.description && <p className="muted small contrib-desc">{c.description}</p>}
+                    <div className="contrib-meta">
+                      <span className="contrib-amount">{fmt(c.amount)}</span>
+                      <span className="muted small">
+                        {c.stats.approved} approved · {c.stats.pending} awaiting · {c.stats.members} recorded
+                      </span>
+                    </div>
+                    <div className="contrib-deadline-edit">
+                      <input
+                        type="date"
+                        value={contribDeadlineDrafts[c.id] ?? c.deadline}
+                        onChange={(e) => setContribDeadlineDrafts((current) => ({ ...current, [c.id]: e.target.value }))}
+                        aria-label={`Deadline for ${c.title}`}
+                      />
+                      <button
+                        className="btn ghost sm"
+                        disabled={busyContribDeadline === c.id}
+                        onClick={() => saveContribDeadline(c)}
+                      >
+                        {busyContribDeadline === c.id ? <Loader2 size={14} className="spin-ico" /> : 'Save deadline'}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="contrib-actions">
+                    <button
+                      className="btn ghost sm"
+                      disabled={busyContrib === `t-${c.id}`}
+                      onClick={() => toggleContribActive(c)}
+                    >
+                      {busyContrib === `t-${c.id}` ? (
+                        <Loader2 size={14} className="spin-ico" />
+                      ) : c.is_active ? (
+                        <Undo2 size={14} />
+                      ) : (
+                        <CheckCircle2 size={14} />
+                      )}
+                      {c.is_active ? 'Close' : 'Reopen'}
+                    </button>
+                    <button className="btn subtle sm" onClick={() => setOpenedContrib(isOpen ? null : c.id)}>
+                      {isOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                      {isOpen ? 'Hide payments' : `Review payments (${c.stats.pending})`}
+                    </button>
+                  </div>
+                  {isOpen &&
+                    (c.payments.length === 0 ? (
+                      <p className="muted small" style={{ marginTop: 12 }}>
+                        No member has reported payment yet.
+                      </p>
+                    ) : (
+                      <div className="contrib-pays">
+                        {c.payments.map((p) => (
+                          <div className="contrib-pay-row" key={p.id}>
+                            <Avatar name={p.display_name} className="sm" />
+                            <div className="contrib-pay-member">
+                              <strong>{p.display_name}</strong>
+                              <span className="muted small">@{p.username}</span>
+                            </div>
+                            {p.status === 'approved' ? (
+                              <span className="approved-tag">
+                                <CheckCircle2 size={14} /> Approved
+                              </span>
+                            ) : (
+                              <span className="badge status-requested">Awaiting approval</span>
+                            )}
+                            <div className="actions">
+                              <button
+                                className="btn ghost sm"
+                                disabled={!p.proof}
+                                title={p.proof ? 'View the payment message this member pasted' : 'No message was pasted'}
+                                onClick={() =>
+                                  setProofViewContrib({
+                                    title: `${p.display_name}'s payment message`,
+                                    subtitle: c.title,
+                                    amountDue: Number(c.amount),
+                                    proof: p.proof,
+                                  })
+                                }
+                              >
+                                <ReceiptText size={14} />
+                                Proof
+                              </button>
+                              {p.status !== 'approved' && (
+                                <button
+                                  className="btn sm"
+                                  title="Mark as paid"
+                                  onClick={() => approveContribPayment(c.id, p.id, p.display_name)}
+                                >
+                                  Approve
+                                </button>
+                              )}
+                              {p.status === 'pending' && (
+                                <button
+                                  className="btn sm danger-ghost"
+                                  onClick={() => resetContribPayment(c.id, p.id, p.display_name)}
+                                >
+                                  Reset
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       <h2 style={{ marginBottom: 16 }}>Manage members ({members.length})</h2>
       <div className="grid">
         {members.map((m) => (
@@ -869,6 +1179,44 @@ export default function Admin() {
                     <XCircle size={15} />
                   )}
                   {appealModal.decision === 'approved' ? 'Approve & reactivate' : 'Decline appeal'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Contribution payment proof view */}
+      {proofViewContrib && (
+        <div
+          className="modal-backdrop"
+          onMouseDown={(e) => e.target === e.currentTarget && closeProofViewContrib()}
+        >
+          <div className="modal" role="dialog" aria-modal="true" aria-label="Payment proof">
+            <div className="modal-head">
+              <span className="icon-tile blue">
+                <ReceiptText size={18} />
+              </span>
+              <div>
+                <h2 className="section-title">{proofViewContrib.title}</h2>
+                <p className="muted small">{proofViewContrib.subtitle}</p>
+              </div>
+              <button className="icon-btn" onClick={closeProofViewContrib} aria-label="Close">
+                <X size={17} />
+              </button>
+            </div>
+            <div className="modal-body">
+              {proofViewContrib.proof && (
+                <div className="field">
+                  <label>Message from member</label>
+                  <p style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                    {proofViewContrib.proof.message}
+                  </p>
+                </div>
+              )}
+              <div className="modal-actions">
+                <button className="btn ghost" onClick={closeProofViewContrib}>
+                  Close
                 </button>
               </div>
             </div>

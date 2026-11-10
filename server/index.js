@@ -807,14 +807,30 @@ app.patch('/api/payments/:id/proof', requireActiveMember, (req, res) => {
 
 app.get('/api/admin/payments', requireActiveAdmin, (req, res) => {
   ensureAllPayments();
+  const memberId = req.query.member_id ? Number(req.query.member_id) : null;
+  const period = req.query.period ? String(req.query.period) : null;
+  if (memberId && !Number.isFinite(memberId)) {
+    return res.status(400).json({ error: 'member_id must be a number' });
+  }
+  const params = [];
+  let where = 'WHERE 1=1';
+  if (memberId) {
+    where += ' AND p.member_id = ?';
+    params.push(memberId);
+  }
+  if (period) {
+    where += ' AND p.period = ?';
+    params.push(period);
+  }
   const rows = db
     .prepare(
       `SELECT p.*, m.display_name, m.username
        FROM payments p JOIN members m ON m.id = p.member_id
+       ${where}
        ORDER BY p.period DESC, m.display_name COLLATE NOCASE`
     )
-    .all();
-  res.json({ payments: rows.map(publicPayment) });
+    .all(...params);
+  res.json({ payments: rows.map(publicPayment), filters: { member_id: memberId, period } });
 });
 
 app.post('/api/admin/payments/:id/approve', requireActiveAdmin, (req, res) => {
@@ -1097,7 +1113,7 @@ const publicContribution = (c, mine) => ({
 });
 
 // Open (active) contributions with the calling member's payment status.
-app.get('/api/contributions', requireActiveMember, (req, res) => {
+app.get('/api/contributions', requireActiveUser, (req, res) => {
   const rows = db
     .prepare(
       `SELECT c.*, cp.id AS cp_id
@@ -1105,7 +1121,7 @@ app.get('/api/contributions', requireActiveMember, (req, res) => {
        LEFT JOIN contribution_payments cp
          ON cp.contribution_id = c.id AND cp.member_id = ?
        WHERE c.is_active = 1
-       ORDER BY c.deadline ASC, c.id DESC`
+       ORDER BY c.created_at DESC, c.id DESC`
     )
     .all(req.member.id);
   const mine = db
@@ -1192,7 +1208,7 @@ app.post('/api/contributions/:id/cancel', requireActiveMember, (req, res) => {
 
 // Admin: all contributions with per-member payment rows for approval.
 app.get('/api/admin/contributions', requireActiveAdmin, (req, res) => {
-  const rows = db.prepare('SELECT * FROM contributions ORDER BY id DESC').all();
+  const rows = db.prepare('SELECT * FROM contributions ORDER BY created_at DESC, id DESC').all();
   res.json({
     contributions: rows.map((c) => {
       const pays = db

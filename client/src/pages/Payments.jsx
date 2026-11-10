@@ -771,22 +771,42 @@ function MemberPayments() {
 
 function AdminPayments() {
   const [payments, setPayments] = useState([]);
+  const [members, setMembers] = useState([]);
   const [dueDates, setDueDates] = useState({});
   const [busyDueId, setBusyDueId] = useState(null);
   const [error, setError] = useState('');
   const [fines, setFines] = useState({});
   const [fineReasons, setFineReasons] = useState({});
+  const [filterMember, setFilterMember] = useState('');
+  const [filterPeriod, setFilterPeriod] = useState('');
   const [proofView, setProofView] = useState(null);
 
   const load = async () => {
-    const { payments } = await api.adminPayments();
-    setPayments(payments);
-    setDueDates(Object.fromEntries(payments.map((p) => [p.id, p.due_date || ''])));
+    const [{ payments: rows, filters }, membersList] = await Promise.all([
+      api.adminPayments(),
+      api.members(),
+    ]);
+    setPayments(rows);
+    setMembers(membersList.members);
+    setFilterPeriod(filters?.period || '');
+    setFilterMember(filters?.member_id != null ? String(filters.member_id) : '');
+    setDueDates(Object.fromEntries(rows.map((p) => [p.id, p.due_date || ''])));
   };
 
   useEffect(() => {
     load().catch((e) => setError(e.message));
   }, []);
+
+  const applyFilters = async () => {
+    const qs = new URLSearchParams();
+    if (filterMember) qs.set('member_id', filterMember);
+    if (filterPeriod) qs.set('period', filterPeriod);
+    const { payments: rows, filters } = await api.adminPayments(qs.toString());
+    setPayments(rows);
+    setFilterPeriod(filters?.period || '');
+    setFilterMember(filters?.member_id != null ? String(filters.member_id) : '');
+    setDueDates(Object.fromEntries(rows.map((p) => [p.id, p.due_date || ''])));
+  };
 
   const approve = async (id) => {
     await api.approvePayment(id);
@@ -833,7 +853,7 @@ function AdminPayments() {
     }
   };
 
-  const periods = [...new Set(payments.map((p) => p.period))];
+  const periods = [...new Set(payments.map((p) => p.period))].sort().reverse();
   const latest = periods[0];
   const summary = payments.filter((p) => p.period === latest).reduce(
     (acc, p) => {
@@ -854,6 +874,48 @@ function AdminPayments() {
       </div>
 
       <ContributionsAdmin />
+
+      <div className="card pad" style={{ marginBottom: 16, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13, fontWeight: 600 }}>
+          Member
+          <select
+            value={filterMember}
+            onChange={(e) => setFilterMember(e.target.value)}
+            aria-label="Filter payments by member"
+          >
+            <option value="">All members</option>
+            {members
+              .filter((m) => m.role === 'member')
+              .sort((a, b) => a.display_name.localeCompare(b.display_name))
+              .map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.display_name} (@{m.username})
+                </option>
+              ))}
+          </select>
+        </label>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13, fontWeight: 600 }}>
+          Month
+          <select
+            value={filterPeriod}
+            onChange={(e) => setFilterPeriod(e.target.value)}
+            aria-label="Filter payments by month"
+          >
+            <option value="">All months</option>
+            {periods.map((period) => (
+              <option key={period} value={period}>
+                {period}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button className="btn" onClick={applyFilters}>
+          Apply filter
+        </button>
+        <button className="btn ghost" onClick={() => { setFilterMember(''); setFilterPeriod(''); applyFilters(); }}>
+          Clear
+        </button>
+      </div>
 
       <div className="stat-grid">
         <div className="stat-card">

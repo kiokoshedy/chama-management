@@ -109,7 +109,7 @@ export const api = {
   updatePaymentProof: (id, proofMessage) =>
     request(`/payments/${id}/proof`, { method: 'PATCH', body: JSON.stringify({ proof_message: proofMessage }) }),
 
-  adminPayments: () => request('/admin/payments'),
+  adminPayments: (qs = '') => request(`/admin/payments${qs ? '?' + qs : ''}`),
   approvePayment: (id) => request(`/admin/payments/${id}/approve`, { method: 'POST' }),
   rejectPayment: (id) => request(`/admin/payments/${id}/reject`, { method: 'POST' }),
   finePayment: (id, amount, reason = '') =>
