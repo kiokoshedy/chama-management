@@ -14,6 +14,7 @@ A small full-stack app for a group with member accounts, roles, and an admin das
 - Admin dashboard: create members, promote/demote roles, remove members
 - Profile editing (display name, bio)
 - Monthly and special contributions with pasted payment proof (M-Pesa or Bank confirmation)
+- Previous Arrears: money a member already owes, recorded on the member and added to their dues
 - Meeting minutes: admins upload the minutes of each meeting (PDF or Word) and members view or
   download them from the Minutes page
 
@@ -66,9 +67,21 @@ open a PDF inline, or download any document. Admins can delete a set of minutes 
 Uploaded files are stored under `server/uploads/minutes/` (ignored by git), and the meeting date,
 title, notes and file details are kept in the `minutes` table in `server/group.db`.
 
+## Previous Arrears and outstanding totals
+
+Some members owe money from before the current payment records. An admin can record it on the member from the Admin dashboard (or when creating the member). The amount is stored on the member, shown separately as **Previous Arrears**, and added in full to their outstanding total on the dashboard, profile, and payments page. Set it back to `0` once it has been settled.
+
+A member's **Outstanding** total is the full amount they still owe, made up of:
+
+- unpaid monthly contributions,
+- their **Previous Arrears**, and
+- **open contributions** — special contributions that are active and not yet approved for that member (unpaid or awaiting admin approval).
+
+Each part is also shown on its own so members can see what makes up the total. A contribution drops out of Outstanding once the admin approves its payment. Admin accounts do not carry balances or contributions.
+
 ## Roles
 - `member` – can view directory, edit own profile
-- `admin` – everything above plus the admin dashboard (create members, manage roles, remove)
+- `admin` – everything above plus the admin dashboard and **Payment approvals** tab (approve/reject proof, apply fines, approve special contributions, set Previous Arrears)
 
 ## Data
 Data is stored in `server/group.db` (SQLite). Delete the file to reset.

@@ -72,6 +72,7 @@ const TITLES = [
   { test: (p) => p.startsWith('/payments'), label: 'Payments', crumb: 'Contributions' },
   { test: (p) => p.startsWith('/minutes'), label: 'Meeting minutes', crumb: 'Documents' },
   { test: (p) => p.startsWith('/constitution'), label: 'Constitution', crumb: 'Documents' },
+  { test: (p) => p.startsWith('/admin/payments'), label: 'Payment approvals', crumb: 'Administration' },
   { test: (p) => p.startsWith('/admin'), label: 'Admin', crumb: 'Administration' },
   { test: (p) => p.startsWith('/profile'), label: 'Profile', crumb: 'Account' },
 ];
@@ -275,11 +276,20 @@ function Shell({ member, logout }) {
               <div className="nav-label">Administration</div>
               <NavLink
                 to="/admin"
+                end
                 className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
                 onClick={closeNav}
               >
                 <ShieldCheck size={18} />
                 Admin
+              </NavLink>
+              <NavLink
+                to="/admin/payments"
+                className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+                onClick={closeNav}
+              >
+                <Wallet size={18} />
+                Payment approvals
                 {pendingApprovals > 0 && <span className="nav-badge">{pendingApprovals}</span>}
               </NavLink>
             </div>
@@ -350,6 +360,8 @@ function Shell({ member, logout }) {
               <Route path="/minutes" element={<Minutes />} />
               <Route path="/constitution" element={<Constitution />} />
               <Route path="/profile" element={<Profile />} />
+              {isAdmin && <Route path="/admin/payments" element={<Payments />} />}
+              {!isAdmin && <Route path="/admin/payments" element={<Navigate to="/" replace />} />}
               {isAdmin && <Route path="/admin" element={<Admin />} />}
               {!isAdmin && <Route path="/admin" element={<Navigate to="/" replace />} />}
               <Route path="*" element={<Navigate to="/" replace />} />

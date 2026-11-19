@@ -7,6 +7,7 @@ import {
   KeyRound,
   Phone,
   Wallet,
+  HandCoins,
   CheckCircle2,
   CircleAlert,
   ShieldCheck,
@@ -38,22 +39,39 @@ export default function Profile() {
   const [pwSaving, setPwSaving] = useState(false);
   const [showPw, setShowPw] = useState(false);
 
-  const [summary, setSummary] = useState({ collected: 0, count: 0, outstanding: 0 });
+  const [summary, setSummary] = useState({
+    collected: 0,
+    count: 0,
+    outstanding: 0,
+    contribOutstanding: 0,
+  });
+  const pendingBalance = Number(member.pending_balance || 0);
 
   useEffect(() => {
-    api
-      .paymentsMe()
-      .then(({ payments }) => {
+    let cancelled = false;
+    const isAdmin = member.role === 'admin';
+    Promise.all([
+      isAdmin ? Promise.resolve({ payments: [] }) : api.paymentsMe(),
+      isAdmin ? Promise.resolve({ contributions: [] }) : api.contributions(),
+    ])
+      .then(([{ payments }, { contributions }]) => {
+        if (cancelled) return;
         const collected = payments
           .filter((p) => p.status === 'paid')
           .reduce((sum, p) => sum + Number(p.total || 0), 0);
         const outstanding = payments
           .filter((p) => p.status !== 'paid')
           .reduce((sum, p) => sum + Number(p.total || 0), 0);
-        setSummary({ collected, count: payments.length, outstanding });
+        const contribOutstanding = contributions
+          .filter((c) => c.is_active !== false && c.mine?.state !== 'approved')
+          .reduce((sum, c) => sum + Number(c.amount || 0), 0);
+        setSummary({ collected, count: payments.length, outstanding, contribOutstanding });
       })
-      .catch(() => {});
-  }, []);
+      .catch(() => { });
+    return () => {
+      cancelled = true;
+    };
+  }, [member.role]);
 
   const change = (e) => setForm({ ...form, [e.target.name]: e.target.value });
   const changePw = (e) => setPw({ ...pw, [e.target.name]: e.target.value });
@@ -142,10 +160,31 @@ export default function Profile() {
             />
             <StatCard
               label="Outstanding"
-              value={member.role === 'admin' ? '—' : fmt(summary.outstanding)}
-              hint={member.role === 'admin' ? 'Admin accounts do not contribute' : 'Still to be cleared'}
+              value={
+                member.role === 'admin'
+                  ? '—'
+                  : fmt(summary.outstanding + pendingBalance + summary.contribOutstanding)
+              }
+              hint={
+                member.role === 'admin'
+                  ? 'Admin accounts do not contribute'
+                  : 'Dues + Previous Arrears + open contributions'
+              }
               icon={CircleAlert}
               tone="amber"
+            />
+            <StatCard
+              label="Previous Arrears"
+              value={member.role === 'admin' ? '—' : fmt(pendingBalance)}
+              hint={member.role === 'admin' ? 'Admin accounts do not contribute' : 'Carried over · included in Outstanding'}
+              icon={HandCoins}
+            />
+            <StatCard
+              label="Special Contribution Arrears"
+              value={member.role === 'admin' ? '—' : fmt(summary.contribOutstanding)}
+              hint={member.role === 'admin' ? 'Admin accounts do not contribute' : 'Not approved · included in Outstanding'}
+              icon={HandCoins}
+              tone="violet"
             />
             <StatCard
               label="Access level"

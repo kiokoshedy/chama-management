@@ -17,6 +17,7 @@ import {
   ShieldCheck,
   CircleUser,
   Wallet,
+  Coins,
 } from 'lucide-react';
 import { api } from '../api.js';
 import { useAuth } from '../context/AuthContext.jsx';
@@ -35,7 +36,7 @@ export default function Members() {
   const [selected, setSelected] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const isAdmin = member.role === 'admin' ;
+  const isAdmin = member.role === 'admin';
 
   useEffect(() => {
     let cancelled = false;
@@ -276,13 +277,44 @@ export default function Members() {
       )}
 
       {selected && (
-        <MemberDrawer member={selected} isAdmin={isAdmin} onClose={() => setSelected(null)} />
+        <MemberDrawer
+          member={selected}
+          isAdmin={isAdmin}
+          onClose={() => setSelected(null)}
+          onUpdate={(updated) => {
+            setMembers((rows) => rows.map((m) => (m.id === updated.id ? updated : m)));
+            setSelected(updated);
+          }}
+        />
       )}
     </div>
   );
 }
 
-function MemberDrawer({ member, isAdmin, onClose }) {
+function MemberDrawer({ member, isAdmin, onClose, onUpdate }) {
+  const [balanceDraft, setBalanceDraft] = useState(member.pending_balance ?? 0);
+  const [balanceBusy, setBalanceBusy] = useState(false);
+  const [balanceMsg, setBalanceMsg] = useState('');
+
+  useEffect(() => {
+    setBalanceDraft(member.pending_balance ?? 0);
+    setBalanceMsg('');
+  }, [member.id, member.pending_balance]);
+
+  const saveBalance = async () => {
+    setBalanceBusy(true);
+    setBalanceMsg('');
+    try {
+      const { member: updated } = await api.setMemberBalance(member.id, balanceDraft);
+      onUpdate?.(updated);
+      setBalanceMsg('Previous Arrears saved for this member.');
+    } catch (err) {
+      setBalanceMsg(err.message);
+    } finally {
+      setBalanceBusy(false);
+    }
+  };
+
   return (
     <>
       <div className="drawer-backdrop" onClick={onClose} />
@@ -364,6 +396,53 @@ function MemberDrawer({ member, isAdmin, onClose }) {
               </div>
             )}
           </dl>
+
+          {isAdmin && (
+            <div className="card pad" style={{ marginBottom: 16, background: 'var(--surface-2)' }}>
+              <div className="row-between" style={{ gap: 10 }}>
+                <div>
+                  <strong>Previous Arrears</strong>
+                  <p className="muted small" style={{ marginTop: 3 }}>
+                    Money this member already owes. Stored on this member only.
+                  </p>
+                </div>
+                <span className="badge pending">{fmt(Number(member.pending_balance || 0))}</span>
+              </div>
+              <div className="member-phone-edit" style={{ marginTop: 12 }}>
+                <Coins size={14} />
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={balanceDraft}
+                  onChange={(e) => setBalanceDraft(e.target.value)}
+                  placeholder="0"
+                  aria-label={`Previous Arrears for ${member.display_name}`}
+                />
+                <button className="btn sm" onClick={saveBalance} disabled={balanceBusy}>
+                  {balanceBusy ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+              <p className="muted small" style={{ marginTop: 8 }}>
+                Added in full to this member’s dues. Set 0 once settled.
+              </p>
+              {balanceMsg && (
+                <p className="muted small" style={{ marginTop: 8 }}>
+                  {balanceMsg}
+                </p>
+              )}
+            </div>
+          )}
+
+          {!isAdmin && member.pending_balance > 0 && (
+            <div className="detail-row" style={{ marginTop: 14 }}>
+              <dt>
+                <Coins size={13} style={{ verticalAlign: '-2px', marginRight: 6 }} />
+                Previous Arrears
+              </dt>
+              <dd className="mono">{fmt(Number(member.pending_balance))}</dd>
+            </div>
+          )}
 
           {!isAdmin && (
             <p className="muted small" style={{ marginTop: 18 }}>

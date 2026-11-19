@@ -28,6 +28,7 @@ const publicMember = (m) => ({
   display_name: m.display_name,
   bio: m.bio,
   phone: m.phone || '',
+  pending_balance: Number(m.pending_balance || 0),
   role: m.role,
   designation: m.designation || '',
   status: m.status,
@@ -173,6 +174,16 @@ const normalizeKenyanPhone = (value) => {
   else if (number.startsWith('7') && number.length === 9) number = `254${number}`;
   if (!/^2547\d{8}$/.test(number)) return null;
   return `+${number}`;
+};
+
+// A carried balance is money a member already owes from before the current
+// payment records. It stays attached to the member and is added to their dues in
+// full, independent of any month or special contribution.
+const parseBalance = (value) => {
+  if (value === '' || value == null) return 0;
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount < 0) return null;
+  return Math.round(amount * 100) / 100;
 };
 
 // ---- Auth ----
@@ -1102,7 +1113,7 @@ app.post('/api/admin/contributions/:id/payments/:pid/reset', requireActiveAdmin,
 // ---- Admin: member management ----
 
 app.post('/api/admin/members', requireActiveAdmin, (req, res) => {
-  const { username, password, display_name, bio, phone, role, designation } = req.body || {};
+  const { username, password, display_name, bio, phone, role, designation, pending_balance } = req.body || {};
   if (!username || !password || !display_name) {
     return res.status(400).json({ error: 'Username, password and display name are required' });
   }
@@ -1122,10 +1133,14 @@ app.post('/api/admin/members', requireActiveAdmin, (req, res) => {
   if (normalizedPhone === null) {
     return res.status(400).json({ error: 'Enter a valid Kenyan mobile number, e.g. 0712345678' });
   }
+  const balance = parseBalance(pending_balance);
+  if (balance === null) {
+    return res.status(400).json({ error: 'Enter a valid Previous Arrears (zero or more)' });
+  }
   const hash = bcrypt.hashSync(String(password), 10);
   const info = db
     .prepare(
-      'INSERT INTO members (username, password_hash, display_name, bio, phone, role, designation) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      'INSERT INTO members (username, password_hash, display_name, bio, phone, pending_balance, role, designation) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
     )
     .run(
       name,
@@ -1133,6 +1148,7 @@ app.post('/api/admin/members', requireActiveAdmin, (req, res) => {
       String(display_name).trim(),
       String(bio || '').trim(),
       normalizedPhone,
+      balance,
       targetRole,
       targetDesignation
     );
@@ -1151,6 +1167,24 @@ app.patch('/api/admin/members/:id/phone', requireActiveAdmin, (req, res) => {
     return res.status(400).json({ error: 'Enter a valid Kenyan mobile number, e.g. 0712345678' });
   }
   db.prepare('UPDATE members SET phone = ? WHERE id = ?').run(normalized, target.id);
+  const updated = db.prepare('SELECT * FROM members WHERE id = ?').get(target.id);
+  res.json({ member: publicMember(updated) });
+});
+
+// A Previous Arrears amount is stored on the member itself, not on a payment or month.
+// Admins can record what a member already owes; the full amount is added to
+// their outstanding total wherever dues are shown.
+app.patch('/api/admin/members/:id/balance', requireActiveAdmin, (req, res) => {
+  const target = db.prepare('SELECT * FROM members WHERE id = ?').get(req.params.id);
+  if (!target) return res.status(404).json({ error: 'Member not found' });
+  if (target.role === 'admin') {
+    return res.status(400).json({ error: 'Admin accounts do not carry balances' });
+  }
+  const balance = parseBalance(req.body?.pending_balance);
+  if (balance === null) {
+    return res.status(400).json({ error: 'Enter a valid Previous Arrears (zero or more)' });
+  }
+  db.prepare('UPDATE members SET pending_balance = ? WHERE id = ?').run(balance, target.id);
   const updated = db.prepare('SELECT * FROM members WHERE id = ?').get(target.id);
   res.json({ member: publicMember(updated) });
 });

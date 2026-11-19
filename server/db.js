@@ -18,6 +18,7 @@ db.exec(`
     display_name TEXT NOT NULL,
     bio TEXT DEFAULT '',
     phone TEXT NOT NULL DEFAULT '',
+    pending_balance REAL NOT NULL DEFAULT 0,
     role TEXT NOT NULL DEFAULT 'member',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
@@ -88,6 +89,9 @@ if (!memberColumns.some((c) => c.name === 'designation')) {
 }
 if (!memberColumns.some((c) => c.name === 'phone')) {
   db.exec("ALTER TABLE members ADD COLUMN phone TEXT NOT NULL DEFAULT ''");
+}
+if (!memberColumns.some((c) => c.name === 'pending_balance')) {
+  db.exec('ALTER TABLE members ADD COLUMN pending_balance REAL NOT NULL DEFAULT 0');
 }
 
 const paymentColumns = db.prepare('PRAGMA table_info(payments)').all();

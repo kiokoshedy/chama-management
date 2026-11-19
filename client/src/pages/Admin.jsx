@@ -18,6 +18,7 @@ const emptyForm = {
   display_name: '',
   bio: '',
   phone: '',
+  pending_balance: '',
   designation: '',
 };
 
@@ -38,6 +39,7 @@ export default function Admin() {
 
   const [members, setMembers] = useState([]);
   const [phoneDrafts, setPhoneDrafts] = useState({});
+  const [balanceDrafts, setBalanceDrafts] = useState({});
   const [form, setForm] = useState(emptyForm);
   const [monthly, setMonthly] = useState('');
   const [error, setError] = useState('');
@@ -82,6 +84,7 @@ export default function Admin() {
 
     setMembers(members);
     setPhoneDrafts(Object.fromEntries(members.map((m) => [m.id, m.phone || ''])));
+    setBalanceDrafts(Object.fromEntries(members.map((m) => [m.id, m.pending_balance || 0])));
     setMonthly(monthly_amount);
     setAppeals(appealsList);
     setMinutes(minutesList);
@@ -288,6 +291,21 @@ export default function Admin() {
     }
   };
 
+  const setBalance = async (id) => {
+    setError('');
+    setSuccess('');
+    setBusyId(id);
+    try {
+      const { member } = await api.setMemberBalance(id, balanceDrafts[id] ?? 0);
+      setSuccess(`Previous Arrears saved for ${member.display_name}.`);
+      setBalanceDrafts((current) => ({ ...current, [id]: member.pending_balance }));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   const applyStatus = async (id, status, reasonText, name) => {
     setError('');
     setSuccess('');
@@ -412,6 +430,19 @@ export default function Admin() {
                 />
                 <span className="field-hint">Shown in the member directory and reports.</span>
               </div>
+            </div>
+            <div className="field">
+              <label>Previous Arrears owed (optional)</label>
+              <input
+                name="pending_balance"
+                type="number"
+                min="0"
+                step="0.01"
+                value={form.pending_balance}
+                onChange={change}
+                placeholder="0"
+              />
+              <span className="field-hint">Money this member already owes. Added to their dues in full.</span>
             </div>
             <div className="field">
               <label>Designation (optional)</label>
@@ -737,122 +768,122 @@ export default function Admin() {
                 return bb - aa;
               })
               .map((c) => {
-              const isOpen = openedContrib === c.id;
-              return (
-                <div className="contrib-admin-card" key={c.id}>
-                  <div className="contrib-main">
-                    <div className="contrib-title-row">
-                      <strong className="contrib-title">{c.title}</strong>
-                      <span className={`badge ${c.is_active ? 'member' : 'pending'}`}>
-                        {c.is_active ? 'Open' : 'Closed'}
-                      </span>
+                const isOpen = openedContrib === c.id;
+                return (
+                  <div className="contrib-admin-card" key={c.id}>
+                    <div className="contrib-main">
+                      <div className="contrib-title-row">
+                        <strong className="contrib-title">{c.title}</strong>
+                        <span className={`badge ${c.is_active ? 'member' : 'pending'}`}>
+                          {c.is_active ? 'Open' : 'Closed'}
+                        </span>
+                      </div>
+                      {c.description && <p className="muted small contrib-desc">{c.description}</p>}
+                      <div className="contrib-meta">
+                        <span className="contrib-amount">{fmt(c.amount)}</span>
+                        <span className="muted small">
+                          {c.stats.approved} approved · {c.stats.pending} awaiting · {c.stats.members} recorded
+                        </span>
+                      </div>
+                      <div className="contrib-deadline-edit">
+                        <input
+                          type="date"
+                          value={contribDeadlineDrafts[c.id] ?? c.deadline}
+                          onChange={(e) => setContribDeadlineDrafts((current) => ({ ...current, [c.id]: e.target.value }))}
+                          aria-label={`Deadline for ${c.title}`}
+                        />
+                        <button
+                          className="btn ghost sm"
+                          disabled={busyContribDeadline === c.id}
+                          onClick={() => saveContribDeadline(c)}
+                        >
+                          {busyContribDeadline === c.id ? <Loader2 size={14} className="spin-ico" /> : 'Save deadline'}
+                        </button>
+                      </div>
                     </div>
-                    {c.description && <p className="muted small contrib-desc">{c.description}</p>}
-                    <div className="contrib-meta">
-                      <span className="contrib-amount">{fmt(c.amount)}</span>
-                      <span className="muted small">
-                        {c.stats.approved} approved · {c.stats.pending} awaiting · {c.stats.members} recorded
-                      </span>
-                    </div>
-                    <div className="contrib-deadline-edit">
-                      <input
-                        type="date"
-                        value={contribDeadlineDrafts[c.id] ?? c.deadline}
-                        onChange={(e) => setContribDeadlineDrafts((current) => ({ ...current, [c.id]: e.target.value }))}
-                        aria-label={`Deadline for ${c.title}`}
-                      />
+                    <div className="contrib-actions">
                       <button
                         className="btn ghost sm"
-                        disabled={busyContribDeadline === c.id}
-                        onClick={() => saveContribDeadline(c)}
+                        disabled={busyContrib === `t-${c.id}`}
+                        onClick={() => toggleContribActive(c)}
                       >
-                        {busyContribDeadline === c.id ? <Loader2 size={14} className="spin-ico" /> : 'Save deadline'}
+                        {busyContrib === `t-${c.id}` ? (
+                          <Loader2 size={14} className="spin-ico" />
+                        ) : c.is_active ? (
+                          <Undo2 size={14} />
+                        ) : (
+                          <CheckCircle2 size={14} />
+                        )}
+                        {c.is_active ? 'Close' : 'Reopen'}
+                      </button>
+                      <button className="btn subtle sm" onClick={() => setOpenedContrib(isOpen ? null : c.id)}>
+                        {isOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                        {isOpen ? 'Hide payments' : `Review payments (${c.stats.pending})`}
                       </button>
                     </div>
-                  </div>
-                  <div className="contrib-actions">
-                    <button
-                      className="btn ghost sm"
-                      disabled={busyContrib === `t-${c.id}`}
-                      onClick={() => toggleContribActive(c)}
-                    >
-                      {busyContrib === `t-${c.id}` ? (
-                        <Loader2 size={14} className="spin-ico" />
-                      ) : c.is_active ? (
-                        <Undo2 size={14} />
+                    {isOpen &&
+                      (c.payments.length === 0 ? (
+                        <p className="muted small" style={{ marginTop: 12 }}>
+                          No member has reported payment yet.
+                        </p>
                       ) : (
-                        <CheckCircle2 size={14} />
-                      )}
-                      {c.is_active ? 'Close' : 'Reopen'}
-                    </button>
-                    <button className="btn subtle sm" onClick={() => setOpenedContrib(isOpen ? null : c.id)}>
-                      {isOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                      {isOpen ? 'Hide payments' : `Review payments (${c.stats.pending})`}
-                    </button>
+                        <div className="contrib-pays">
+                          {c.payments.map((p) => (
+                            <div className="contrib-pay-row" key={p.id}>
+                              <Avatar name={p.display_name} className="sm" />
+                              <div className="contrib-pay-member">
+                                <strong>{p.display_name}</strong>
+                                <span className="muted small">@{p.username}</span>
+                              </div>
+                              {p.status === 'approved' ? (
+                                <span className="approved-tag">
+                                  <CheckCircle2 size={14} /> Approved
+                                </span>
+                              ) : (
+                                <span className="badge status-requested">Awaiting approval</span>
+                              )}
+                              <div className="actions">
+                                <button
+                                  className="btn ghost sm"
+                                  disabled={!p.proof}
+                                  title={p.proof ? 'View the payment message this member pasted' : 'No message was pasted'}
+                                  onClick={() =>
+                                    setProofViewContrib({
+                                      title: `${p.display_name}'s payment message`,
+                                      subtitle: c.title,
+                                      amountDue: Number(c.amount),
+                                      proof: p.proof,
+                                    })
+                                  }
+                                >
+                                  <ReceiptText size={14} />
+                                  Proof
+                                </button>
+                                {p.status !== 'approved' && (
+                                  <button
+                                    className="btn sm"
+                                    title="Mark as paid"
+                                    onClick={() => approveContribPayment(c.id, p.id, p.display_name)}
+                                  >
+                                    Approve
+                                  </button>
+                                )}
+                                {p.status === 'pending' && (
+                                  <button
+                                    className="btn sm danger-ghost"
+                                    onClick={() => resetContribPayment(c.id, p.id, p.display_name)}
+                                  >
+                                    Reset
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ))}
                   </div>
-                  {isOpen &&
-                    (c.payments.length === 0 ? (
-                      <p className="muted small" style={{ marginTop: 12 }}>
-                        No member has reported payment yet.
-                      </p>
-                    ) : (
-                      <div className="contrib-pays">
-                        {c.payments.map((p) => (
-                          <div className="contrib-pay-row" key={p.id}>
-                            <Avatar name={p.display_name} className="sm" />
-                            <div className="contrib-pay-member">
-                              <strong>{p.display_name}</strong>
-                              <span className="muted small">@{p.username}</span>
-                            </div>
-                            {p.status === 'approved' ? (
-                              <span className="approved-tag">
-                                <CheckCircle2 size={14} /> Approved
-                              </span>
-                            ) : (
-                              <span className="badge status-requested">Awaiting approval</span>
-                            )}
-                            <div className="actions">
-                              <button
-                                className="btn ghost sm"
-                                disabled={!p.proof}
-                                title={p.proof ? 'View the payment message this member pasted' : 'No message was pasted'}
-                                onClick={() =>
-                                  setProofViewContrib({
-                                    title: `${p.display_name}'s payment message`,
-                                    subtitle: c.title,
-                                    amountDue: Number(c.amount),
-                                    proof: p.proof,
-                                  })
-                                }
-                              >
-                                <ReceiptText size={14} />
-                                Proof
-                              </button>
-                              {p.status !== 'approved' && (
-                                <button
-                                  className="btn sm"
-                                  title="Mark as paid"
-                                  onClick={() => approveContribPayment(c.id, p.id, p.display_name)}
-                                >
-                                  Approve
-                                </button>
-                              )}
-                              {p.status === 'pending' && (
-                                <button
-                                  className="btn sm danger-ghost"
-                                  onClick={() => resetContribPayment(c.id, p.id, p.display_name)}
-                                >
-                                  Reset
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    ))}
-                </div>
-              );
-            })}
+                );
+              })}
           </div>
         )}
       </div>
@@ -895,6 +926,26 @@ export default function Admin() {
                 className="btn ghost sm"
                 disabled={busyId === m.id}
                 onClick={() => setPhone(m.id)}
+              >
+                Save
+              </button>
+            </div>
+            <div className="member-phone-edit member-balance-edit">
+              <Coins size={14} />
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={balanceDrafts[m.id] ?? m.pending_balance ?? 0}
+                onChange={(e) => setBalanceDrafts((current) => ({ ...current, [m.id]: e.target.value }))}
+                placeholder="Previous Arrears owed"
+                title="Money this member already owes — added to their dues in full"
+                aria-label={`Previous Arrears for ${m.display_name}`}
+              />
+              <button
+                className="btn ghost sm"
+                disabled={busyId === m.id}
+                onClick={() => setBalance(m.id)}
               >
                 Save
               </button>

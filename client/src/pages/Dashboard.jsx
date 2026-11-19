@@ -51,7 +51,7 @@ function buildChart(payments) {
 
 export default function Dashboard() {
   const { member } = useAuth();
-  const isAdmin = member.role === 'admin' ;
+  const isAdmin = member.role === 'admin';
   const [payments, setPayments] = useState([]);
   const [contribs, setContribs] = useState([]);
   const [members, setMembers] = useState([]);
@@ -122,8 +122,29 @@ export default function Dashboard() {
   }, [payments, currentPeriod]);
 
   const openContribs = contribs.filter((c) => c.is_active !== false);
+  const openContribsOwed = isAdmin
+    ? []
+    : openContribs.filter((c) => c.mine?.state !== 'approved');
+  const contribOutstanding = openContribsOwed.reduce(
+    (sum, c) => sum + Number(c.amount || 0),
+    0
+  );
   const allMembers = members.filter((m) => m.role === 'member');
   const committee = allMembers.filter((m) => m.designation && m.designation !== '');
+  const pendingBalance = Number(member.pending_balance || 0);
+  const carriedBalances = allMembers.reduce(
+    (sum, m) => sum + Number(m.pending_balance || 0),
+    0
+  );
+  const adminDuesCount = payments.filter((p) => p.status !== 'paid').length;
+  const adminContribArrears = contribs
+    .filter((c) => c.is_active !== false)
+    .reduce((sum, c) => {
+      const approved = (c.payments || []).filter((p) => p.status === 'approved').length;
+      const owed = Math.max(0, allMembers.length - approved);
+      return sum + owed * Number(c.amount || 0);
+    }, 0);
+  const allArrears = totals.outstanding + carriedBalances + adminContribArrears;
   const today = new Date().toLocaleDateString('en-GB', {
     weekday: 'long',
     day: 'numeric',
@@ -195,6 +216,13 @@ export default function Dashboard() {
         {isAdmin ? (
           <>
             <StatCard
+              label="All Arrears"
+              value={fmt(allArrears)}
+              hint={`Dues (${adminDuesCount}) + Previous Arrears + open contributions`}
+              icon={HandCoins}
+              tone="amber"
+            />
+            <StatCard
               label="Collected this month"
               value={fmt(currentStats.collected)}
               hint={currentPeriod ? monthShort(currentPeriod) : 'No period yet'}
@@ -221,6 +249,12 @@ export default function Dashboard() {
               icon={CircleAlert}
               tone="amber"
             />
+            <StatCard
+              label="Carried balances"
+              value={fmt(carriedBalances)}
+              hint="Owed from before · added to member dues"
+              icon={HandCoins}
+            />
           </>
         ) : (
           <>
@@ -233,10 +267,16 @@ export default function Dashboard() {
             />
             <StatCard
               label="Outstanding"
-              value={fmt(totals.outstanding)}
-              hint={`${totals.unpaid} payment${totals.unpaid === 1 ? '' : 's'} not cleared`}
+              value={fmt(totals.outstanding + pendingBalance + contribOutstanding)}
+              hint={`Dues (${totals.unpaid}) + Previous Arrears + open contributions`}
               icon={CircleAlert}
               tone="amber"
+            />
+            <StatCard
+              label="Previous Arrears"
+              value={fmt(pendingBalance)}
+              hint="Carried over · included in Outstanding"
+              icon={HandCoins}
             />
             <StatCard
               label="Awaiting approval"
@@ -246,9 +286,9 @@ export default function Dashboard() {
               tone="blue"
             />
             <StatCard
-              label="Open contributions"
-              value={openContribs.length}
-              hint="Special collections running now"
+              label="Special Contribution Arrears"
+              value={fmt(contribOutstanding)}
+              hint={`${openContribsOwed.length} of ${openContribs.length} not approved · in Outstanding`}
               icon={HandCoins}
               tone="violet"
             />

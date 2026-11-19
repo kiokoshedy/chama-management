@@ -23,7 +23,7 @@ import {
 const POINTS = [
   { icon: Users, text: 'A member directory that stays up to date' },
   { icon: Wallet, text: 'Contributions, dues and payment proof in one place' },
-  { icon: BellRing, text: 'Automatic reminders before every due date' },
+  { icon: BellRing, text: 'Due dates and balances always in view' },
   { icon: ShieldCheck, text: 'Accounts and roles managed by your admin' },
 ];
 

@@ -441,24 +441,7 @@ function MemberContribs({ contribs, busyId, onPay, onCancel, onEditProof, onView
 
 export default function Payments() {
   const { member } = useAuth();
-  if (member.role === 'admin') {
-    return (
-      <div>
-        <div className="page-header">
-          <div>
-            <h1>Payments</h1>
-            <p className="page-sub">
-              Admin accounts manage member payments from the admin portal and do not have member payment records.
-            </p>
-          </div>
-          <a className="btn ghost" href="/admin">
-            Go to Admin
-          </a>
-        </div>
-      </div>
-    );
-  }
-  return <MemberPayments />;
+  return member.role === 'admin' ? <AdminPayments /> : <MemberPayments />;
 }
 
 function MemberPayments() {
@@ -565,7 +548,18 @@ function MemberPayments() {
 
   const paid = payments.filter((p) => p.status === 'paid').reduce((a, p) => a + p.total, 0);
   const unpaid = payments.filter((p) => p.status !== 'paid').length;
-  const pendingContribs = contribs.filter((c) => c.mine?.state === 'pending').length;
+  const unpaidAmount = payments
+    .filter((p) => p.status !== 'paid')
+    .reduce((sum, p) => sum + Number(p.total || 0), 0);
+  const pendingBalance = Number(member.pending_balance || 0);
+  const openContribsOwed = contribs.filter(
+    (c) => c.is_active !== false && c.mine?.state !== 'approved'
+  );
+  const contribOutstanding = openContribsOwed.reduce(
+    (sum, c) => sum + Number(c.amount || 0),
+    0
+  );
+  const totalOutstanding = unpaidAmount + pendingBalance + contribOutstanding;
 
   return (
     <div>
@@ -597,21 +591,31 @@ function MemberPayments() {
               <Clock3 size={18} />
             </span>
           </div>
-          <span className="stat-value">{unpaid}</span>
+          <span className="stat-value">{fmt(totalOutstanding)}</span>
           <span className="stat-hint">
-            {unpaid === 1 ? 'Payment' : 'Payments'} not yet cleared
+            Dues ({unpaid}) + Previous Arrears + open contributions
           </span>
         </div>
         <div className="stat-card">
           <div className="stat-top">
-            <span className="stat-label">Special contributions pending</span>
+            <span className="stat-label">Previous Arrears</span>
             <span className="icon-tile blue">
               <HandCoins size={18} />
             </span>
           </div>
-          <span className="stat-value">{pendingContribs}</span>
+          <span className="stat-value">{fmt(pendingBalance)}</span>
+          <span className="stat-hint">Carried over · included in what you owe</span>
+        </div>
+        <div className="stat-card">
+          <div className="stat-top">
+            <span className="stat-label">Special Contribution Arrears</span>
+            <span className="icon-tile violet">
+              <HandCoins size={18} />
+            </span>
+          </div>
+          <span className="stat-value">{fmt(contribOutstanding)}</span>
           <span className="stat-hint">
-            {pendingContribs === 1 ? 'Awaiting' : 'Awaiting'} admin approval
+            {openContribsOwed.length} not approved · in Outstanding
           </span>
         </div>
       </div>
@@ -868,8 +872,8 @@ function AdminPayments() {
     <div>
       <div className="page-header">
         <div>
-          <h1>Payments</h1>
-          <p className="page-sub">Review requests, approve contributions, and apply fines.</p>
+          <h1>Payment approvals</h1>
+          <p className="page-sub">Review member payment proof, approve contributions, and apply fines.</p>
         </div>
       </div>
 
