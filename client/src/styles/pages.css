@@ -1321,63 +1321,6 @@
 }
 
 /* ------------------------------------------------------------
-   SMS panel
-   ------------------------------------------------------------ */
-
-.sms-admin-card {
-  margin-bottom: 26px;
-}
-
-.sms-admin-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-  margin-top: 18px;
-}
-
-.sms-admin-detail {
-  display: flex;
-  gap: 10px;
-  margin-top: 7px;
-  font-size: 13px;
-  color: var(--text-2);
-}
-
-.sms-admin-detail strong {
-  min-width: 160px;
-  color: var(--text-3);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.sms-history {
-  margin-top: 18px;
-  padding-top: 14px;
-  border-top: 1px dashed var(--border-strong);
-}
-
-.sms-history > strong {
-  display: block;
-  margin-bottom: 8px;
-  font-size: 13px;
-}
-
-.sms-history-row {
-  display: grid;
-  grid-template-columns: minmax(100px, 1fr) 80px 90px minmax(150px, auto);
-  align-items: center;
-  gap: 8px;
-  padding: 7px 0;
-  border-bottom: 1px solid var(--border);
-  font-size: 13px;
-}
-
-.sms-history-row:last-child {
-  border-bottom: none;
-}
-
-/* ------------------------------------------------------------
    Appeals
    ------------------------------------------------------------ */
 
@@ -1777,23 +1720,6 @@
   .member-card .actions .btn,
   .member-card .actions select {
     flex: 1;
-  }
-
-  .sms-admin-row {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .sms-admin-row .btn {
-    width: 100%;
-  }
-
-  .sms-history-row {
-    grid-template-columns: 1fr auto;
-  }
-
-  .sms-history-row > span:last-child {
-    grid-column: 1 / -1;
   }
 
   .dash-hero {

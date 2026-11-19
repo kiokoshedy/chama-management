@@ -62,21 +62,6 @@ db.exec(`
     UNIQUE(contribution_id, member_id)
   );
 
-  CREATE TABLE IF NOT EXISTS sms_reminders (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    reminder_key TEXT NOT NULL UNIQUE,
-    kind TEXT NOT NULL,
-    payment_id INTEGER REFERENCES payments(id) ON DELETE CASCADE,
-    contribution_id INTEGER REFERENCES contributions(id) ON DELETE CASCADE,
-    member_id INTEGER NOT NULL REFERENCES members(id) ON DELETE CASCADE,
-    phone TEXT NOT NULL,
-    message TEXT NOT NULL,
-    provider_id TEXT,
-    status TEXT NOT NULL DEFAULT 'sending',
-    sent_at TEXT NOT NULL DEFAULT (datetime('now')),
-    error TEXT
-  );
-
   CREATE TABLE IF NOT EXISTS minutes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
@@ -90,6 +75,9 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 `);
+
+// SMS reminders are no longer part of the app; drop the old table if present.
+db.exec('DROP TABLE IF EXISTS sms_reminders');
 
 const memberColumns = db.prepare('PRAGMA table_info(members)').all();
 if (!memberColumns.some((c) => c.name === 'status')) {

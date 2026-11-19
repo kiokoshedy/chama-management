@@ -11,6 +11,7 @@ import { signToken, requireAuth, requireAdmin } from './auth.js';
 import { analyzeProof, cleanProofMessage, PROVIDER_LABELS, MAX_PROOF_LENGTH } from './proof.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const UPLOAD_ROOT = process.env.UPLOAD_DIR || path.join(__dirname, 'uploads');
 
 seedAdmin();
 
@@ -129,7 +130,6 @@ function ensureAllPayments() {
   }
 }
 
-const SMS_REMINDER_DAYS = 5;
 const DESIGNATIONS = [
   'Chairman',
   'Vice Chairman',
@@ -138,26 +138,6 @@ const DESIGNATIONS = [
   'Vice Treasurer',
   'Assistant Secretary',
 ];
-const AFRICASTALKING_SMS_URL = {
-  live: process.env.AFRICASTALKING_API_URL || 'https://api.africastalking.com/version1/messaging/bulk',
-  sandbox:
-    process.env.AFRICASTALKING_API_URL || 'https://api.sandbox.africastalking.com/version1/messaging/bulk',
-};
-
-const smsConfig = () => {
-  const environment = String(process.env.AFRICASTALKING_ENV || 'sandbox').toLowerCase();
-  return {
-    username: process.env.AFRICASTALKING_USERNAME || '',
-    apiKey: process.env.AFRICASTALKING_API_KEY || '',
-    senderId: process.env.AFRICASTALKING_SENDER_ID || '',
-    environment: environment === 'live' ? 'live' : 'sandbox',
-  };
-};
-
-const smsConfigured = () => {
-  const config = smsConfig();
-  return Boolean(config.username && config.apiKey && config.senderId);
-};
 
 const kenyaDate = (date = new Date()) => {
   const parts = new Intl.DateTimeFormat('en-KE', {
@@ -168,12 +148,6 @@ const kenyaDate = (date = new Date()) => {
   }).formatToParts(date);
   const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
   return `${values.year}-${values.month}-${values.day}`;
-};
-
-const addDays = (dateString, days) => {
-  const date = new Date(`${dateString}T00:00:00Z`);
-  date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString().slice(0, 10);
 };
 
 const parseDateOnly = (value) => {
@@ -199,190 +173,6 @@ const normalizeKenyanPhone = (value) => {
   else if (number.startsWith('7') && number.length === 9) number = `254${number}`;
   if (!/^2547\d{8}$/.test(number)) return null;
   return `+${number}`;
-};
-
-const formatMoney = (amount) =>
-  new Intl.NumberFormat('en-KE', { maximumFractionDigits: 2 }).format(Number(amount || 0));
-
-const reminderMessage = (candidate) => {
-  const label =
-    candidate.kind === 'monthly'
-      ? 'monthly contribution'
-      : `special contribution "${candidate.title}"`;
-  return `Hello ${candidate.displayName}, your ${label} of KSh ${formatMoney(candidate.amount)} is due on ${candidate.dueDate}. Please pay before the due date.`;
-};
-
-const sendAfricaTalkingSms = async (phone, message) => {
-  const config = smsConfig();
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 20000);
-  let response;
-  try {
-    response = await fetch(AFRICASTALKING_SMS_URL[config.environment], {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        apiKey: config.apiKey,
-      },
-      body: JSON.stringify({
-        username: config.username,
-        message,
-        senderId: config.senderId,
-        phoneNumbers: [phone],
-      }),
-      signal: controller.signal,
-    });
-  } catch (error) {
-    if (error.name === 'AbortError') throw new Error("Africa's Talking request timed out");
-    throw error;
-  } finally {
-    clearTimeout(timeout);
-  }
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(body.message || `Africa's Talking request failed (${response.status})`);
-  }
-  const recipient =
-    body.SMSMessageData?.Recipients?.[0] ||
-    (body.messageId
-      ? { messageId: body.messageId, status: body.status, statusCode: body.statusCode }
-      : null);
-  const recipientStatus = String(recipient?.status || '').toLowerCase();
-  const failedStatus = /fail|reject|error|invalid/.test(recipientStatus);
-  if (!recipient || Number(recipient.statusCode) >= 400 || failedStatus) {
-    throw new Error(recipient?.message || recipient?.status || "Africa's Talking rejected the message");
-  }
-  if (!recipient.messageId) {
-    throw new Error("Africa's Talking did not return a message ID");
-  }
-  return {
-    providerId: recipient.messageId,
-    providerStatus: recipient.status || String(recipient.statusCode || ''),
-  };
-};
-
-const claimSmsReminder = (candidate, message) => {
-  const result = db
-    .prepare(
-      `INSERT OR IGNORE INTO sms_reminders
-       (reminder_key, kind, payment_id, contribution_id, member_id, phone, message)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(
-      candidate.key,
-      candidate.kind,
-      candidate.paymentId || null,
-      candidate.contributionId || null,
-      candidate.memberId,
-      candidate.phone,
-      message
-    );
-  return result.changes === 1 ? Number(result.lastInsertRowid) : null;
-};
-
-const sendSmsReminder = async (candidate) => {
-  if (!candidate.phone) return { skipped: true, reason: 'missing_phone' };
-  const message = reminderMessage(candidate);
-  const reminderId = claimSmsReminder(candidate, message);
-  if (!reminderId) return { skipped: true, reason: 'already_sent' };
-  try {
-    const result = await sendAfricaTalkingSms(candidate.phone, message);
-    db.prepare(
-      "UPDATE sms_reminders SET provider_id = ?, status = 'sent', error = NULL WHERE id = ?"
-    ).run(result.providerId, reminderId);
-    return { sent: true };
-  } catch (error) {
-    db.prepare('DELETE FROM sms_reminders WHERE id = ?').run(reminderId);
-    return { failed: true, error: error.message };
-  }
-};
-
-let smsReminderRunning = false;
-const runSmsReminders = async () => {
-  if (smsReminderRunning) return { configured: smsConfigured(), skipped: true, reason: 'already_running' };
-  if (!smsConfigured()) return { configured: false, sent: 0, failed: 0, skipped: 0, candidates: 0 };
-  smsReminderRunning = true;
-  try {
-    ensureAllPayments();
-    db.prepare(
-      "DELETE FROM sms_reminders WHERE status = 'sending' AND sent_at < datetime('now', '-30 minutes')"
-    ).run();
-    const todayDate = kenyaDate();
-    const reminderDate = addDays(todayDate, SMS_REMINDER_DAYS);
-    const catchUpDate = addDays(todayDate, SMS_REMINDER_DAYS - 1);
-    const candidates = [];
-    const monthly = db
-      .prepare(
-        `SELECT p.id AS payment_id, p.amount, p.fine, p.due_date,
-                m.id AS member_id, m.display_name, m.phone
-         FROM payments p
-         JOIN members m ON m.id = p.member_id
-         WHERE p.status = 'unpaid' AND p.due_date IN (?, ?) AND m.status = 'active' AND m.role = 'member'`
-      )
-      .all(reminderDate, catchUpDate);
-    for (const row of monthly) {
-      candidates.push({
-        key: `monthly:${row.payment_id}:${row.due_date}`,
-        kind: 'monthly',
-        paymentId: row.payment_id,
-        memberId: row.member_id,
-        displayName: row.display_name,
-        phone: row.phone,
-        amount: Number(row.amount) + Number(row.fine || 0),
-        dueDate: row.due_date,
-      });
-    }
-
-    const special = db
-      .prepare(
-        `SELECT c.id AS contribution_id, c.title, c.amount, c.deadline,
-                m.id AS member_id, m.display_name, m.phone
-         FROM contributions c
-         CROSS JOIN members m
-         LEFT JOIN contribution_payments cp
-           ON cp.contribution_id = c.id AND cp.member_id = m.id
-         WHERE c.is_active = 1 AND c.deadline IN (?, ?) AND m.status = 'active' AND m.role = 'member'
-           AND (cp.id IS NULL OR cp.status NOT IN ('pending', 'approved'))`
-      )
-      .all(reminderDate, catchUpDate);
-    for (const row of special) {
-      candidates.push({
-        key: `special:${row.contribution_id}:${row.member_id}:${row.deadline}`,
-        kind: 'special',
-        contributionId: row.contribution_id,
-        memberId: row.member_id,
-        displayName: row.display_name,
-        phone: row.phone,
-        title: row.title,
-        amount: row.amount,
-        dueDate: row.deadline,
-      });
-    }
-
-    const results = [];
-    for (const candidate of candidates) results.push(await sendSmsReminder(candidate));
-    return {
-      configured: true,
-      reminder_date: reminderDate,
-      catch_up_date: catchUpDate,
-      candidates: candidates.length,
-      sent: results.filter((result) => result.sent).length,
-      failed: results.filter((result) => result.failed).length,
-      skipped: results.filter((result) => result.skipped).length,
-    };
-  } finally {
-    smsReminderRunning = false;
-  }
-};
-
-const startSmsReminderScheduler = () => {
-  const check = () => {
-    runSmsReminders().catch((error) => console.error('SMS reminder check failed:', error.message));
-  };
-  check();
-  const timer = setInterval(check, 60 * 60 * 1000);
-  timer.unref?.();
 };
 
 // ---- Auth ----
@@ -508,7 +298,7 @@ app.post('/api/members/me/password', requireActiveUser, (req, res) => {
 // A single uploaded document (PDF or Word). Everyone can view it; only admins
 // can upload. A new upload permanently replaces the previous version.
 
-const CONSTITUTION_DIR = path.join(__dirname, 'uploads', 'constitution');
+const CONSTITUTION_DIR = path.join(UPLOAD_ROOT, 'constitution');
 
 const ensureConstitutionDir = () => fs.mkdirSync(CONSTITUTION_DIR, { recursive: true });
 
@@ -602,7 +392,7 @@ app.post('/api/admin/constitution', requireActiveAdmin, upload.single('file'), (
 // Members can browse the archive and open or download any document. Deleting a
 // minute removes both its database row and the stored file.
 
-const MINUTES_DIR = path.join(__dirname, 'uploads', 'minutes');
+const MINUTES_DIR = path.join(UPLOAD_ROOT, 'minutes');
 
 const ensureMinutesDir = () => fs.mkdirSync(MINUTES_DIR, { recursive: true });
 
@@ -1309,75 +1099,6 @@ app.post('/api/admin/contributions/:id/payments/:pid/reset', requireActiveAdmin,
   res.json({ ok: true });
 });
 
-app.get('/api/admin/sms/status', requireActiveAdmin, (req, res) => {
-  const config = smsConfig();
-  res.json({
-    provider: "Africa's Talking",
-    configured: smsConfigured(),
-    environment: config.environment,
-    sender_id: config.senderId || null,
-    reminder_days: SMS_REMINDER_DAYS,
-    next_reminder_date: addDays(kenyaDate(), SMS_REMINDER_DAYS),
-  });
-});
-
-app.get('/api/admin/sms/reminders', requireActiveAdmin, (req, res) => {
-  const rows = db
-    .prepare(
-      `SELECT r.*, m.display_name
-       FROM sms_reminders r
-       JOIN members m ON m.id = r.member_id
-       ORDER BY r.id DESC
-       LIMIT 100`
-    )
-    .all();
-  res.json({ reminders: rows });
-});
-
-app.post('/api/admin/sms/send', requireActiveAdmin, async (req, res) => {
-  if (!smsConfigured()) {
-    return res.status(400).json({ error: 'Configure Africa’s Talking credentials before sending reminders' });
-  }
-  try {
-    res.json(await runSmsReminders());
-  } catch (error) {
-    res.status(500).json({ error: error.message || 'Could not run SMS reminders' });
-  }
-});
-
-const updateSmsDelivery = (body) => {
-  const payload = body || {};
-  const messageId = String(payload.messageId || payload.message_id || payload.id || '').trim();
-  if (!messageId) return { ok: true, matched: false };
-  const rawStatus = String(payload.status || payload.deliveryStatus || '').trim();
-  const statusCode = Number(payload.statusCode || payload.status_code || 0);
-  let status = 'sent';
-  if (statusCode >= 400 || /failed|rejected|undeliver|error/i.test(rawStatus)) {
-    status = 'failed';
-  } else if (/delivered|success/i.test(rawStatus)) {
-    status = 'delivered';
-  } else if (/queued|pending/i.test(rawStatus)) {
-    status = 'queued';
-  }
-  const error =
-    status === 'failed' ? String(payload.failureReason || payload.failure_reason || 'Delivery failed') : null;
-  const result = db
-    .prepare('UPDATE sms_reminders SET status = ?, error = ? WHERE provider_id = ?')
-    .run(status, error, messageId);
-  return { ok: true, matched: result.changes > 0 };
-};
-
-const smsCallbackAuthorized = (req) => {
-  const expected = process.env.AFRICASTALKING_CALLBACK_TOKEN || '';
-  if (!expected) return smsConfig().environment !== 'live';
-  return req.get('x-callback-token') === expected || req.query.token === expected;
-};
-
-app.post('/api/sms/delivery', (req, res) => {
-  if (!smsCallbackAuthorized(req)) return res.status(401).json({ error: 'Invalid callback token' });
-  res.json(updateSmsDelivery(req.body));
-});
-
 // ---- Admin: member management ----
 
 app.post('/api/admin/members', requireActiveAdmin, (req, res) => {
@@ -1597,6 +1318,22 @@ app.patch('/api/admin/members/:id/designation', requireActiveAdmin, (req, res) =
 
 const PORT = process.env.PORT || 4000;
 
+app.get('/health', (_req, res) => res.json({ ok: true }));
+
+app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
+
+// ---- Static client ----
+// In production the built React app is served from the same origin, so the
+// client's relative /api calls need no proxy or CORS configuration.
+const CLIENT_DIST = process.env.CLIENT_DIST || path.join(__dirname, '..', 'client', 'dist');
+if (fs.existsSync(CLIENT_DIST)) {
+  app.use(express.static(CLIENT_DIST));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api/')) return next();
+    res.sendFile(path.join(CLIENT_DIST, 'index.html'));
+  });
+}
+
 app.use((err, req, res, next) => {
   if (err instanceof multer.MulterError) {
     if (err.code === 'LIMIT_FILE_SIZE') {
@@ -1610,7 +1347,5 @@ app.use((err, req, res, next) => {
   console.error(err);
   res.status(500).json({ error: err.message || 'Server error' });
 });
-
-startSmsReminderScheduler();
 
 app.listen(PORT, () => console.log(`API server listening on http://localhost:${PORT}`));

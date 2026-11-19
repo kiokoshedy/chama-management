@@ -1,0 +1,10 @@
+**/node_modules
+client/dist
+server/group.db
+server/group.db-shm
+server/group.db-wal
+server/uploads
+.env
+.git
+.gitignore
+README.md

@@ -145,10 +145,6 @@ export const api = {
   settings: () => request('/admin/settings'),
   saveSettings: (data) =>
     request('/admin/settings', { method: 'PUT', body: JSON.stringify(data) }),
-  smsStatus: () => request('/admin/sms/status'),
-  smsReminders: () => request('/admin/sms/reminders'),
-  sendSmsReminders: () => request('/admin/sms/send', { method: 'POST' }),
-
   createMember: (data) => request('/admin/members', { method: 'POST', body: JSON.stringify(data) }),
   setDesignation: (id, designation) =>
     request(`/admin/members/${id}/designation`, {

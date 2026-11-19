@@ -196,7 +196,7 @@ export default function Profile() {
                 />
               </div>
               <span className="field-hint">
-                Used for contribution reminders. Kenyan numbers are normalised automatically.
+                Shown in the member directory. Kenyan numbers are normalised automatically.
               </span>
             </div>
 

@@ -97,10 +97,6 @@ export default function Login() {
               <strong>CSV</strong>
               <span>Monthly reports</span>
             </div>
-            <div>
-              <strong>SMS</strong>
-              <span>Due-date reminders</span>
-            </div>
           </div>
           <span style={{ width: '100%' }}>
             © {new Date().getFullYear()} Group Hub Exclusive. It’s Us

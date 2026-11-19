@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   UserPlus, Coins, ShieldCheck, Loader2, PauseCircle, UserX, RotateCcw,
   KeyRound, FileText, Eye, CalendarClock, HardDrive, CloudUpload, LinkIcon,
-  ExternalLink, UserCheck, Phone, Send, X, TriangleAlert, CheckCircle2,
+  ExternalLink, UserCheck, Phone, X, TriangleAlert, CheckCircle2,
   XCircle, MessageSquareText, NotebookText, HandCoins, Plus, Undo2, ReceiptText,
   ChevronDown, ChevronUp
 } from 'lucide-react';
@@ -40,10 +40,6 @@ export default function Admin() {
   const [phoneDrafts, setPhoneDrafts] = useState({});
   const [form, setForm] = useState(emptyForm);
   const [monthly, setMonthly] = useState('');
-  const [sms, setSms] = useState(null);
-  const [smsHistory, setSmsHistory] = useState([]);
-  const [smsBusy, setSmsBusy] = useState(false);
-  const [smsMessage, setSmsMessage] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [creating, setCreating] = useState(false);
@@ -73,16 +69,12 @@ export default function Admin() {
     const [
       { members },
       { monthly_amount },
-      smsStatus,
-      { reminders },
       { appeals: appealsList },
       { minutes: minutesList },
       { contributions: contribsList },
     ] = await Promise.all([
       api.members(),
       api.settings(),
-      api.smsStatus(),
-      api.smsReminders(),
       api.adminAppeals(),
       api.minutes(),
       api.adminContributions(),
@@ -91,8 +83,6 @@ export default function Admin() {
     setMembers(members);
     setPhoneDrafts(Object.fromEntries(members.map((m) => [m.id, m.phone || ''])));
     setMonthly(monthly_amount);
-    setSms(smsStatus);
-    setSmsHistory(reminders);
     setAppeals(appealsList);
     setMinutes(minutesList);
     setContribs(contribsList);
@@ -289,36 +279,12 @@ export default function Admin() {
     setBusyId(id);
     try {
       const { member } = await api.setMemberPhone(id, phoneDrafts[id] || '');
-      setSuccess(`SMS number saved for ${member.display_name}.`);
+      setSuccess(`Mobile number saved for ${member.display_name}.`);
       setPhoneDrafts((current) => ({ ...current, [id]: member.phone || '' }));
     } catch (err) {
       setError(err.message);
     } finally {
       setBusyId(null);
-    }
-  };
-
-  const runSmsCheck = async () => {
-    if (
-      sms?.environment === 'live' &&
-      !window.confirm("Send all eligible SMS reminders now using the live Africa’s Talking account?")
-    ) {
-      return;
-    }
-    setError('');
-    setSmsMessage('');
-    setSmsBusy(true);
-    try {
-      const result = await api.sendSmsReminders();
-      const history = await api.smsReminders();
-      setSmsHistory(history.reminders);
-      setSmsMessage(
-        `Reminder check complete: ${result.sent || 0} sent, ${result.failed || 0} failed, ${result.skipped || 0} skipped.`
-      );
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setSmsBusy(false);
     }
   };
 
@@ -444,7 +410,7 @@ export default function Admin() {
                   placeholder="0712345678"
                   autoComplete="tel"
                 />
-                <span className="field-hint">Used for contribution reminders.</span>
+                <span className="field-hint">Shown in the member directory and reports.</span>
               </div>
             </div>
             <div className="field">
@@ -505,67 +471,6 @@ export default function Admin() {
             <button className="btn ghost">Save amount</button>
           </div>
         </form>
-      </div>
-
-      {/* SMS reminders card */}
-      <div className="card pad wide sms-admin-card">
-        <div className="card-title-row">
-          <span className="icon-tile green">
-            <Send size={18} />
-          </span>
-          <div>
-            <h2>SMS reminders</h2>
-            <p className="muted small">
-              Africa's Talking sends unpaid monthly and special-contribution reminders 5 days before each due date.
-            </p>
-          </div>
-          <span className={`badge ${sms?.configured ? 'paid' : 'pending'}`} style={{ marginLeft: 'auto' }}>
-            {sms?.configured ? 'Configured' : 'Not configured'}
-          </span>
-        </div>
-        <div className="sms-admin-row">
-          <div>
-            <div className="sms-admin-detail">
-              <strong>Reminder offset</strong>
-              <span>5 days before due date</span>
-            </div>
-            <div className="sms-admin-detail">
-              <strong>Next reminder check</strong>
-              <span>{sms?.next_reminder_date || '—'}</span>
-            </div>
-            <div className="sms-admin-detail">
-              <strong>Provider mode</strong>
-              <span>{sms?.environment || 'sandbox'}</span>
-            </div>
-            <div className="sms-admin-detail">
-              <strong>Sender ID</strong>
-              <span>{sms?.sender_id || 'Set AFRICASTALKING_SENDER_ID on the server'}</span>
-            </div>
-          </div>
-          <button className="btn ghost" onClick={runSmsCheck} disabled={smsBusy || !sms?.configured}>
-            {smsBusy ? <Loader2 size={15} className="spin-ico" /> : <Send size={15} />}
-            {smsBusy ? 'Checking…' : 'Send eligible reminders'}
-          </button>
-        </div>
-        {smsMessage && (
-          <div className="alert success" style={{ marginTop: 16, marginBottom: 0 }}>
-            <ShieldCheck size={17} />
-            {smsMessage}
-          </div>
-        )}
-        {smsHistory.length > 0 && (
-          <div className="sms-history">
-            <strong>Recent reminder activity</strong>
-            {smsHistory.slice(0, 5).map((reminder) => (
-              <div className="sms-history-row" key={reminder.id}>
-                <span>{reminder.display_name}</span>
-                <span className="muted small">{reminder.kind}</span>
-                <span className={`badge status-${reminder.status}`}>{reminder.status}</span>
-                <span className="muted small">{reminder.sent_at}</span>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
 
       {/* Constitution card */}

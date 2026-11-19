@@ -66,30 +66,36 @@ open a PDF inline, or download any document. Admins can delete a set of minutes 
 Uploaded files are stored under `server/uploads/minutes/` (ignored by git), and the meeting date,
 title, notes and file details are kept in the `minutes` table in `server/group.db`.
 
-## SMS reminders
-
-Africa’s Talking sends contribution reminders 5 days before a due date. Monthly due dates are set per payment on the admin Payments page; special contributions use their deadline. Members can add or update their Kenyan mobile number from Profile, and admins can manage numbers from the Admin dashboard.
-
-Copy `server/.env.example` to `server/.env` and set these values locally:
-
-```dotenv
-AFRICASTALKING_ENV=sandbox
-AFRICASTALKING_USERNAME=your-username
-AFRICASTALKING_API_KEY=your-api-key
-AFRICASTALKING_SENDER_ID=your-registered-sender-id
-```
-
-Keep `AFRICASTALKING_ENV=sandbox` while testing. Set it to `live` only after the account, sender ID, and delivery callback have been verified. Configure the delivery callback in Africa’s Talking as:
-
-```text
-POST https://your-server.example/api/sms/delivery
-```
-
-For live mode, set `AFRICASTALKING_CALLBACK_TOKEN` and include it as the `token` query parameter when configuring the callback URL.
-
 ## Roles
 - `member` – can view directory, edit own profile
 - `admin` – everything above plus the admin dashboard (create members, manage roles, remove)
 
 ## Data
 Data is stored in `server/group.db` (SQLite). Delete the file to reset.
+## Deploy to Fly.io
+
+The repo ships a `Dockerfile` (builds the client, serves it from Express) and a `fly.toml`
+(1 GB volume mounted at `/data`, region `jnb`).
+
+```bash
+curl -L https://fly.io/install.sh | sh
+fly auth signup            # or: fly auth login
+
+fly apps create group-app  # must match `app` in fly.toml
+fly volumes create group_data --region jnb --size 1
+fly secrets set JWT_SECRET="$(openssl rand -hex 32)"
+fly deploy
+fly open
+```
+
+The SQLite database lives at `/data/group.db` and uploads at `/data/uploads`, so both survive
+redeploys. Change the seeded `admin` / `admin123` password right after the first deploy.
+
+Useful commands:
+
+```bash
+fly logs                  # tail server logs
+fly status                # machine + volume status
+fly ssh console           # shell inside the machine
+fly apps restart group-app
+```
