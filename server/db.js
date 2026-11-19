@@ -63,6 +63,17 @@ db.exec(`
     UNIQUE(contribution_id, member_id)
   );
 
+  CREATE TABLE IF NOT EXISTS appeals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    member_id INTEGER NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+    message TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    response TEXT NOT NULL DEFAULT '',
+    decided_by INTEGER REFERENCES members(id),
+    decided_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
   CREATE TABLE IF NOT EXISTS minutes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
@@ -83,6 +94,9 @@ db.exec('DROP TABLE IF EXISTS sms_reminders');
 const memberColumns = db.prepare('PRAGMA table_info(members)').all();
 if (!memberColumns.some((c) => c.name === 'status')) {
   db.exec("ALTER TABLE members ADD COLUMN status TEXT NOT NULL DEFAULT 'active'");
+}
+if (!memberColumns.some((c) => c.name === 'status_reason')) {
+  db.exec("ALTER TABLE members ADD COLUMN status_reason TEXT NOT NULL DEFAULT ''");
 }
 if (!memberColumns.some((c) => c.name === 'designation')) {
   db.exec("ALTER TABLE members ADD COLUMN designation TEXT DEFAULT ''");
