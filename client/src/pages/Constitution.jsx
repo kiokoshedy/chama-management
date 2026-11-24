@@ -17,6 +17,7 @@ import { api } from '../api.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { fmtBytes, fmtDate } from '../format.js';
 import { Link } from 'react-router-dom';
+import WordPreview, { isDocx } from '../WordPreview.jsx';
 
 const ACCEPT = '.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const MAX_BYTES = 15 * 1024 * 1024;
@@ -35,6 +36,7 @@ export default function Constitution() {
   const [meta, setMeta] = useState(null);
   const [viewState, setViewState] = useState('idle'); // idle | ready | error
   const [viewUrl, setViewUrl] = useState(null);
+  const [viewBlob, setViewBlob] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [uploading, setUploading] = useState(false);
@@ -51,6 +53,7 @@ export default function Constitution() {
     if (!data.exists) return;
     try {
       const { blob } = await api.constitutionFile();
+      setViewBlob(blob);
       setViewState('ready');
       setViewUrl((old) => {
         if (old) URL.revokeObjectURL(old);
@@ -78,6 +81,7 @@ export default function Constitution() {
         if (old) URL.revokeObjectURL(old);
         return null;
       });
+      setViewBlob(null);
     };
   }, []);
 
@@ -168,7 +172,7 @@ export default function Constitution() {
       <span>·</span>
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
         <FileText size={13} />
-        {meta?.mime?.includes('pdf') ? 'PDF document' : 'Word document'}
+        {isPdf(meta) ? 'PDF document' : isDocx(meta) ? 'Word document (.docx)' : 'Word document (.doc)'}
       </span>
     </div>
   );
@@ -212,26 +216,19 @@ export default function Constitution() {
           )}
         </div>
       ) : (
-        <div className="card pad wide">
-          <div className="file-chip" style={{ marginBottom: 20 }}>
-            <span className="file-badge word">DOC</span>
-            <div className="file-chip-meta">
-              <strong>{meta.name}</strong>
-              {metaRow}
+        <div className="card pad wide" style={{ padding: 0, overflow: 'hidden' }}>
+          <div className="constitution-toolbar">
+            <div className="file-chip">
+              <span className="file-badge word">{isDocx(meta) ? 'DOCX' : 'DOC'}</span>
+              <div className="file-chip-meta">
+                <strong>{meta.name}</strong>
+                {metaRow}
+              </div>
             </div>
+            {documentActions}
           </div>
-          <div className="empty-state" style={{ padding: '34px 24px' }}>
-            <div className="icon-tile blue">
-              <FileText size={22} />
-            </div>
-            <h3>Preview not available in the browser</h3>
-            <p>Word documents can't be previewed inline — download the file to read it.</p>
-            <div style={{ marginTop: 12 }}>
-              <button className="btn" onClick={download} disabled={busyDownload}>
-                {busyDownload ? <Loader2 size={16} className="spin-ico" /> : <Download size={16} />}
-                Download constitution
-              </button>
-            </div>
+          <div className="word-preview-wrap">
+            <WordPreview blob={viewBlob} name={meta.name} url={viewUrl} onDownload={download} />
           </div>
         </div>
       )
@@ -239,7 +236,7 @@ export default function Constitution() {
       <div className="card pad wide">
         <div className="constitution-toolbar" style={{ borderBottom: 'none', padding: '0 0 16px 0' }}>
           <div className="file-chip">
-            <span className="file-badge">{isPdf(meta) ? 'PDF' : 'DOC'}</span>
+            <span className="file-badge">{isPdf(meta) ? 'PDF' : isDocx(meta) ? 'DOCX' : 'DOC'}</span>
             <div className="file-chip-meta">
               <strong>{meta.name}</strong>
               {metaRow}

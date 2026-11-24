@@ -17,6 +17,7 @@ import {
 import { api } from '../api.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { fmtBytes, fmtDate, fmtDateShort, todayInKenya } from '../format.js';
+import WordPreview, { isDocx } from '../WordPreview.jsx';
 
 const ACCEPT =
   '.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document';
@@ -62,6 +63,7 @@ export default function Minutes() {
   const [busy, setBusy] = useState(null);
   const [viewMinute, setViewMinute] = useState(null);
   const [viewUrl, setViewUrl] = useState(null);
+  const [viewBlob, setViewBlob] = useState(null);
   const [viewBusy, setViewBusy] = useState(false);
   const fileInput = useRef(null);
   const urls = useRef([]);
@@ -157,6 +159,7 @@ export default function Minutes() {
       if (viewUrl) URL.revokeObjectURL(viewUrl);
       const { blob } = await api.minutesFile(minute.id);
       const url = URL.createObjectURL(blob);
+      setViewBlob(blob);
       setViewUrl(url);
       setViewMinute(minute);
     } catch (err) {
@@ -168,6 +171,7 @@ export default function Minutes() {
 
   const closeView = () => {
     setViewMinute(null);
+    setViewBlob(null);
     if (viewUrl) {
       URL.revokeObjectURL(viewUrl);
       setViewUrl(null);
@@ -510,23 +514,21 @@ export default function Minutes() {
                 loading="lazy"
               />
             ) : (
-              <div className="empty-state wide" style={{ height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center' }}>
-                <FileText size={32} />
-                <h3>Inline preview not available</h3>
-                <p>This document type cannot be previewed directly. Download it to open.</p>
-                <button className="btn" onClick={() => download(viewMinute)}>
-                  <Download size={16} />
-                  Download
-                </button>
-              </div>
+              <WordPreview
+                blob={viewBlob}
+                name={viewMinute.name}
+                url={viewUrl}
+                onDownload={() => download(viewMinute)}
+              />
             )}
           </div>
-          {isPdf(viewMinute) && viewUrl && (
+          {viewMinute && viewUrl && (
             <div className="card-title-row" style={{ padding: '10px 16px', borderTop: '1px solid var(--border)', justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
                 <strong>{viewMinute.name}</strong>
                 <span className="muted small">
-                  {fmtBytes(viewMinute.size)} · {viewMinute.mime || 'document'}
+                  {fmtBytes(viewMinute.size)} ·{' '}
+                  {isPdf(viewMinute) ? 'PDF' : isDocx(viewMinute) ? 'DOCX' : 'DOC'}
                 </span>
               </div>
               <button className="btn ghost" onClick={() => download(viewMinute)}>
