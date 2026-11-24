@@ -13,6 +13,7 @@ import {
   ShieldCheck,
   Eye,
   EyeOff,
+  TriangleAlert,
 } from 'lucide-react';
 import { api } from '../api.js';
 import { useAuth } from '../context/AuthContext.jsx';
@@ -46,6 +47,7 @@ export default function Profile() {
     contribOutstanding: 0,
   });
   const pendingBalance = Number(member.pending_balance || 0);
+  const pendingFine = Number(member.pending_fine || 0);
 
   useEffect(() => {
     let cancelled = false;
@@ -163,12 +165,17 @@ export default function Profile() {
               value={
                 member.role === 'admin'
                   ? '—'
-                  : fmt(summary.outstanding + pendingBalance + summary.contribOutstanding)
+                  : fmt(
+                      summary.outstanding +
+                        pendingBalance +
+                        pendingFine +
+                        summary.contribOutstanding
+                    )
               }
               hint={
                 member.role === 'admin'
                   ? 'Admin accounts do not contribute'
-                  : 'Dues + Previous Arrears + open contributions'
+                  : 'Dues + Previous Arrears + Fine + open contributions'
               }
               icon={CircleAlert}
               tone="amber"
@@ -178,6 +185,19 @@ export default function Profile() {
               value={member.role === 'admin' ? '—' : fmt(pendingBalance)}
               hint={member.role === 'admin' ? 'Admin accounts do not contribute' : 'Carried over · included in Outstanding'}
               icon={HandCoins}
+            />
+            <StatCard
+              label="Fine"
+              value={member.role === 'admin' ? '—' : fmt(pendingFine)}
+              hint={
+                member.role === 'admin'
+                  ? 'Admin accounts do not contribute'
+                  : member.pending_fine_reason
+                  ? `${member.pending_fine_reason} · in Outstanding`
+                  : 'Added to Outstanding'
+              }
+              icon={TriangleAlert}
+              tone="amber"
             />
             <StatCard
               label="Special Contribution Arrears"

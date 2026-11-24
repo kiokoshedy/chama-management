@@ -19,6 +19,8 @@ db.exec(`
     bio TEXT DEFAULT '',
     phone TEXT NOT NULL DEFAULT '',
     pending_balance REAL NOT NULL DEFAULT 0,
+    pending_fine REAL NOT NULL DEFAULT 0,
+    pending_fine_reason TEXT NOT NULL DEFAULT '',
     role TEXT NOT NULL DEFAULT 'member',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
@@ -106,6 +108,12 @@ if (!memberColumns.some((c) => c.name === 'phone')) {
 }
 if (!memberColumns.some((c) => c.name === 'pending_balance')) {
   db.exec('ALTER TABLE members ADD COLUMN pending_balance REAL NOT NULL DEFAULT 0');
+}
+if (!memberColumns.some((c) => c.name === 'pending_fine')) {
+  db.exec('ALTER TABLE members ADD COLUMN pending_fine REAL NOT NULL DEFAULT 0');
+}
+if (!memberColumns.some((c) => c.name === 'pending_fine_reason')) {
+  db.exec("ALTER TABLE members ADD COLUMN pending_fine_reason TEXT NOT NULL DEFAULT ''");
 }
 
 const paymentColumns = db.prepare('PRAGMA table_info(payments)').all();

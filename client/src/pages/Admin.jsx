@@ -19,6 +19,8 @@ const emptyForm = {
   bio: '',
   phone: '',
   pending_balance: '',
+  pending_fine: '',
+  pending_fine_reason: '',
   designation: '',
 };
 
@@ -40,6 +42,8 @@ export default function Admin() {
   const [members, setMembers] = useState([]);
   const [phoneDrafts, setPhoneDrafts] = useState({});
   const [balanceDrafts, setBalanceDrafts] = useState({});
+  const [fineDrafts, setFineDrafts] = useState({});
+  const [fineReasonDrafts, setFineReasonDrafts] = useState({});
   const [form, setForm] = useState(emptyForm);
   const [monthly, setMonthly] = useState('');
   const [error, setError] = useState('');
@@ -85,6 +89,8 @@ export default function Admin() {
     setMembers(members);
     setPhoneDrafts(Object.fromEntries(members.map((m) => [m.id, m.phone || ''])));
     setBalanceDrafts(Object.fromEntries(members.map((m) => [m.id, m.pending_balance || 0])));
+    setFineDrafts(Object.fromEntries(members.map((m) => [m.id, m.pending_fine || 0])));
+    setFineReasonDrafts(Object.fromEntries(members.map((m) => [m.id, m.pending_fine_reason || ''])));
     setMonthly(monthly_amount);
     setAppeals(appealsList);
     setMinutes(minutesList);
@@ -306,6 +312,30 @@ export default function Admin() {
     }
   };
 
+  const setFine = async (id) => {
+    setError('');
+    setSuccess('');
+    setBusyId(id);
+    try {
+      const { member } = await api.setMemberFine(
+        id,
+        fineDrafts[id] ?? 0,
+        fineReasonDrafts[id] ?? ''
+      );
+      setSuccess(
+        member.pending_fine > 0
+          ? `Fine saved for ${member.display_name}.`
+          : `Fine cleared for ${member.display_name}.`
+      );
+      setFineDrafts((current) => ({ ...current, [id]: member.pending_fine }));
+      setFineReasonDrafts((current) => ({ ...current, [id]: member.pending_fine_reason }));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   const applyStatus = async (id, status, reasonText, name) => {
     setError('');
     setSuccess('');
@@ -443,6 +473,26 @@ export default function Admin() {
                 placeholder="0"
               />
               <span className="field-hint">Money this member already owes. Added to their dues in full.</span>
+            </div>
+            <div className="field">
+              <label>Fine (optional)</label>
+              <input
+                name="pending_fine"
+                type="number"
+                min="0"
+                step="0.01"
+                value={form.pending_fine}
+                onChange={change}
+                placeholder="0"
+              />
+              <input
+                name="pending_fine_reason"
+                value={form.pending_fine_reason}
+                onChange={change}
+                placeholder="Reason (e.g. lateness)"
+                aria-label="Reason for fine"
+              />
+              <span className="field-hint">Fine for this member. Added to their dues in full.</span>
             </div>
             <div className="field">
               <label>Designation (optional)</label>
@@ -946,6 +996,32 @@ export default function Admin() {
                 className="btn ghost sm"
                 disabled={busyId === m.id}
                 onClick={() => setBalance(m.id)}
+              >
+                Save
+              </button>
+            </div>
+            <div className="member-phone-edit member-fine-edit">
+              <TriangleAlert size={14} />
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={fineDrafts[m.id] ?? m.pending_fine ?? 0}
+                onChange={(e) => setFineDrafts((current) => ({ ...current, [m.id]: e.target.value }))}
+                placeholder="Fine"
+                title="Fine for this member — added to their dues in full"
+                aria-label={`Fine for ${m.display_name}`}
+              />
+              <input
+                value={fineReasonDrafts[m.id] ?? m.pending_fine_reason ?? ''}
+                onChange={(e) => setFineReasonDrafts((current) => ({ ...current, [m.id]: e.target.value }))}
+                placeholder="Reason (e.g. lateness)"
+                aria-label={`Reason for ${m.display_name}'s fine`}
+              />
+              <button
+                className="btn ghost sm"
+                disabled={busyId === m.id}
+                onClick={() => setFine(m.id)}
               >
                 Save
               </button>

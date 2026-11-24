@@ -15,6 +15,7 @@ import {
   ShieldCheck,
   ReceiptText,
   Pencil,
+  TriangleAlert,
 } from 'lucide-react';
 import { api } from '../api.js';
 import { useAuth } from '../context/AuthContext.jsx';
@@ -552,6 +553,7 @@ function MemberPayments() {
     .filter((p) => p.status !== 'paid')
     .reduce((sum, p) => sum + Number(p.total || 0), 0);
   const pendingBalance = Number(member.pending_balance || 0);
+  const pendingFine = Number(member.pending_fine || 0);
   const openContribsOwed = contribs.filter(
     (c) => c.is_active !== false && c.mine?.state !== 'approved'
   );
@@ -559,7 +561,8 @@ function MemberPayments() {
     (sum, c) => sum + Number(c.amount || 0),
     0
   );
-  const totalOutstanding = unpaidAmount + pendingBalance + contribOutstanding;
+  const totalOutstanding =
+    unpaidAmount + pendingBalance + pendingFine + contribOutstanding;
 
   return (
     <div>
@@ -593,7 +596,7 @@ function MemberPayments() {
           </div>
           <span className="stat-value">{fmt(totalOutstanding)}</span>
           <span className="stat-hint">
-            Dues ({unpaid}) + Previous Arrears + open contributions
+            Dues ({unpaid}) + Previous Arrears + Fine + open contributions
           </span>
         </div>
         <div className="stat-card">
@@ -605,6 +608,20 @@ function MemberPayments() {
           </div>
           <span className="stat-value">{fmt(pendingBalance)}</span>
           <span className="stat-hint">Carried over · included in what you owe</span>
+        </div>
+        <div className="stat-card">
+          <div className="stat-top">
+            <span className="stat-label">Fine</span>
+            <span className="icon-tile amber">
+              <TriangleAlert size={18} />
+            </span>
+          </div>
+          <span className="stat-value">{fmt(pendingFine)}</span>
+          <span className="stat-hint">
+            {member.pending_fine_reason
+              ? `${member.pending_fine_reason} · in Outstanding`
+              : 'Added to what you owe'}
+          </span>
         </div>
         <div className="stat-card">
           <div className="stat-top">
@@ -781,6 +798,9 @@ function AdminPayments() {
   const [error, setError] = useState('');
   const [fines, setFines] = useState({});
   const [fineReasons, setFineReasons] = useState({});
+  const [memberFines, setMemberFines] = useState({});
+  const [memberFineReasons, setMemberFineReasons] = useState({});
+  const [memberFineMsg, setMemberFineMsg] = useState('');
   const [filterMember, setFilterMember] = useState('');
   const [filterPeriod, setFilterPeriod] = useState('');
   const [proofView, setProofView] = useState(null);
@@ -792,6 +812,10 @@ function AdminPayments() {
     ]);
     setPayments(rows);
     setMembers(membersList.members);
+    setMemberFines(Object.fromEntries(membersList.members.map((m) => [m.id, m.pending_fine || 0])));
+    setMemberFineReasons(
+      Object.fromEntries(membersList.members.map((m) => [m.id, m.pending_fine_reason || '']))
+    );
     setFilterPeriod(filters?.period || '');
     setFilterMember(filters?.member_id != null ? String(filters.member_id) : '');
     setDueDates(Object.fromEntries(rows.map((p) => [p.id, p.due_date || ''])));
@@ -844,6 +868,28 @@ function AdminPayments() {
     }
   };
 
+  const saveMemberFine = async (m) => {
+    setError('');
+    setMemberFineMsg('');
+    try {
+      const { member } = await api.setMemberFine(
+        m.id,
+        memberFines[m.id] ?? 0,
+        memberFineReasons[m.id] ?? ''
+      );
+      setMembers((rows) => rows.map((row) => (row.id === member.id ? member : row)));
+      setMemberFines((current) => ({ ...current, [m.id]: member.pending_fine }));
+      setMemberFineReasons((current) => ({ ...current, [m.id]: member.pending_fine_reason }));
+      setMemberFineMsg(
+        member.pending_fine > 0
+          ? `Fine saved for ${member.display_name}.`
+          : `Fine cleared for ${member.display_name}.`
+      );
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
   const saveDueDate = async (id) => {
     setError('');
     setBusyDueId(id);
@@ -875,6 +921,56 @@ function AdminPayments() {
           <h1>Payment approvals</h1>
           <p className="page-sub">Review member payment proof, approve contributions, and apply fines.</p>
         </div>
+      </div>
+
+      <div className="card pad" style={{ marginBottom: 16 }}>
+        <div className="row-between" style={{ gap: 10 }}>
+          <div>
+            <h2 className="section-title">Member fines</h2>
+            <p className="muted small" style={{ marginTop: 3 }}>
+              Give one member a fine with a reason. It is added to their outstanding total,
+              separate from monthly fines. Set 0 to clear it.
+            </p>
+          </div>
+          <span className="badge pending">
+            {fmt(members.reduce((sum, m) => sum + Number(m.pending_fine || 0), 0))}
+          </span>
+        </div>
+        <div className="member-fine-list">
+          {members
+            .filter((m) => m.role === 'member')
+            .map((m) => (
+              <div className="member-fine-row" key={m.id}>
+                <span className="member-fine-name">{m.display_name}</span>
+                <div className="member-phone-edit member-fine-edit">
+                  <TriangleAlert size={14} />
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={memberFines[m.id] ?? m.pending_fine ?? 0}
+                    onChange={(e) =>
+                      setMemberFines((current) => ({ ...current, [m.id]: e.target.value }))
+                    }
+                    placeholder="0"
+                    aria-label={`Fine for ${m.display_name}`}
+                  />
+                  <input
+                    value={memberFineReasons[m.id] ?? m.pending_fine_reason ?? ''}
+                    onChange={(e) =>
+                      setMemberFineReasons((current) => ({ ...current, [m.id]: e.target.value }))
+                    }
+                    placeholder="Reason (e.g. lateness)"
+                    aria-label={`Reason for ${m.display_name}'s fine`}
+                  />
+                  <button className="btn ghost sm" onClick={() => saveMemberFine(m)}>
+                    Save
+                  </button>
+                </div>
+              </div>
+            ))}
+        </div>
+        {memberFineMsg && <p className="muted small" style={{ marginTop: 8 }}>{memberFineMsg}</p>}
       </div>
 
       <ContributionsAdmin />

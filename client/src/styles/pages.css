@@ -383,6 +383,39 @@
   font-variant-numeric: tabular-nums;
 }
 
+.member-fine-edit input:first-of-type {
+  max-width: 120px;
+  font-variant-numeric: tabular-nums;
+}
+
+.member-fine-edit input:nth-of-type(2) {
+  flex: 2;
+}
+
+.member-fine-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.member-fine-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 180px) 1fr;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+
+.member-fine-name {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.member-fine-row .member-phone-edit {
+  margin-top: 0;
+}
+
 .bio {
   color: var(--text-2);
   font-size: 13.5px;
@@ -1856,6 +1889,11 @@
 
   .member-phone-edit .btn {
     width: 100%;
+  }
+
+  .member-fine-row {
+    grid-template-columns: 1fr;
+    gap: 6px;
   }
 
   .contrib-await {

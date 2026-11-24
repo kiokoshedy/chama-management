@@ -29,6 +29,8 @@ const publicMember = (m) => ({
   bio: m.bio,
   phone: m.phone || '',
   pending_balance: Number(m.pending_balance || 0),
+  pending_fine: Number(m.pending_fine || 0),
+  pending_fine_reason: m.pending_fine_reason || '',
   role: m.role,
   designation: m.designation || '',
   status: m.status,
@@ -176,9 +178,9 @@ const normalizeKenyanPhone = (value) => {
   return `+${number}`;
 };
 
-// A carried balance is money a member already owes from before the current
-// payment records. It stays attached to the member and is added to their dues in
-// full, independent of any month or special contribution.
+// Member-level amounts (a carried arrears balance or a fine) are money the
+// member owes. They stay attached to the member and are added to dues in full,
+// independent of any month or special contribution.
 const parseBalance = (value) => {
   if (value === '' || value == null) return 0;
   const amount = Number(value);
@@ -1113,7 +1115,18 @@ app.post('/api/admin/contributions/:id/payments/:pid/reset', requireActiveAdmin,
 // ---- Admin: member management ----
 
 app.post('/api/admin/members', requireActiveAdmin, (req, res) => {
-  const { username, password, display_name, bio, phone, role, designation, pending_balance } = req.body || {};
+  const {
+    username,
+    password,
+    display_name,
+    bio,
+    phone,
+    role,
+    designation,
+    pending_balance,
+    pending_fine,
+    pending_fine_reason,
+  } = req.body || {};
   if (!username || !password || !display_name) {
     return res.status(400).json({ error: 'Username, password and display name are required' });
   }
@@ -1137,10 +1150,16 @@ app.post('/api/admin/members', requireActiveAdmin, (req, res) => {
   if (balance === null) {
     return res.status(400).json({ error: 'Enter a valid Previous Arrears (zero or more)' });
   }
+  const fine = targetRole === 'admin' ? 0 : parseBalance(pending_fine);
+  if (fine === null) {
+    return res.status(400).json({ error: 'Enter a valid Fine (zero or more)' });
+  }
+  const fineReason =
+    targetRole === 'admin' ? '' : String(pending_fine_reason || '').trim().slice(0, 200);
   const hash = bcrypt.hashSync(String(password), 10);
   const info = db
     .prepare(
-      'INSERT INTO members (username, password_hash, display_name, bio, phone, pending_balance, role, designation) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+      'INSERT INTO members (username, password_hash, display_name, bio, phone, pending_balance, pending_fine, pending_fine_reason, role, designation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     )
     .run(
       name,
@@ -1149,6 +1168,8 @@ app.post('/api/admin/members', requireActiveAdmin, (req, res) => {
       String(bio || '').trim(),
       normalizedPhone,
       balance,
+      fine,
+      fineReason,
       targetRole,
       targetDesignation
     );
@@ -1185,6 +1206,29 @@ app.patch('/api/admin/members/:id/balance', requireActiveAdmin, (req, res) => {
     return res.status(400).json({ error: 'Enter a valid Previous Arrears (zero or more)' });
   }
   db.prepare('UPDATE members SET pending_balance = ? WHERE id = ?').run(balance, target.id);
+  const updated = db.prepare('SELECT * FROM members WHERE id = ?').get(target.id);
+  res.json({ member: publicMember(updated) });
+});
+
+// A fine is stored on the member itself, with the reason it was given (for
+// example lateness). Like Previous Arrears, the full amount is added to the
+// member's outstanding total. Setting it to 0 clears the fine.
+app.patch('/api/admin/members/:id/fine', requireActiveAdmin, (req, res) => {
+  const target = db.prepare('SELECT * FROM members WHERE id = ?').get(req.params.id);
+  if (!target) return res.status(404).json({ error: 'Member not found' });
+  if (target.role === 'admin') {
+    return res.status(400).json({ error: 'Admin accounts do not carry fines' });
+  }
+  const fine = parseBalance(req.body?.pending_fine);
+  if (fine === null) {
+    return res.status(400).json({ error: 'Enter a valid Fine (zero or more)' });
+  }
+  const reason = String(req.body?.reason || '').trim().slice(0, 200);
+  db.prepare('UPDATE members SET pending_fine = ?, pending_fine_reason = ? WHERE id = ?').run(
+    fine,
+    reason,
+    target.id
+  );
   const updated = db.prepare('SELECT * FROM members WHERE id = ?').get(target.id);
   res.json({ member: publicMember(updated) });
 });

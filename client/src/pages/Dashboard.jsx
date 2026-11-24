@@ -17,6 +17,7 @@ import {
   Sparkles,
   CircleAlert,
   Crown,
+  TriangleAlert,
 } from 'lucide-react';
 import { api } from '../api.js';
 import { useAuth } from '../context/AuthContext.jsx';
@@ -132,8 +133,13 @@ export default function Dashboard() {
   const allMembers = members.filter((m) => m.role === 'member');
   const committee = allMembers.filter((m) => m.designation && m.designation !== '');
   const pendingBalance = Number(member.pending_balance || 0);
+  const pendingFine = Number(member.pending_fine || 0);
   const carriedBalances = allMembers.reduce(
     (sum, m) => sum + Number(m.pending_balance || 0),
+    0
+  );
+  const allFines = allMembers.reduce(
+    (sum, m) => sum + Number(m.pending_fine || 0),
     0
   );
   const adminDuesCount = payments.filter((p) => p.status !== 'paid').length;
@@ -144,7 +150,8 @@ export default function Dashboard() {
       const owed = Math.max(0, allMembers.length - approved);
       return sum + owed * Number(c.amount || 0);
     }, 0);
-  const allArrears = totals.outstanding + carriedBalances + adminContribArrears;
+  const allArrears =
+    totals.outstanding + carriedBalances + allFines + adminContribArrears;
   const today = new Date().toLocaleDateString('en-GB', {
     weekday: 'long',
     day: 'numeric',
@@ -218,7 +225,7 @@ export default function Dashboard() {
             <StatCard
               label="All Arrears"
               value={fmt(allArrears)}
-              hint={`Dues (${adminDuesCount}) + Previous Arrears + open contributions`}
+              hint={`Dues (${adminDuesCount}) + Previous Arrears + Fines + open contributions`}
               icon={HandCoins}
               tone="amber"
             />
@@ -252,8 +259,15 @@ export default function Dashboard() {
             <StatCard
               label="Carried balances"
               value={fmt(carriedBalances)}
-              hint="Owed from before · added to member dues"
+              hint="Previous Arrears · added to member dues"
               icon={HandCoins}
+            />
+            <StatCard
+              label="Fines"
+              value={fmt(allFines)}
+              hint="Assigned to members · added to dues"
+              icon={TriangleAlert}
+              tone="amber"
             />
           </>
         ) : (
@@ -267,8 +281,10 @@ export default function Dashboard() {
             />
             <StatCard
               label="Outstanding"
-              value={fmt(totals.outstanding + pendingBalance + contribOutstanding)}
-              hint={`Dues (${totals.unpaid}) + Previous Arrears + open contributions`}
+              value={fmt(
+                totals.outstanding + pendingBalance + pendingFine + contribOutstanding
+              )}
+              hint={`Dues (${totals.unpaid}) + Previous Arrears + Fine + open contributions`}
               icon={CircleAlert}
               tone="amber"
             />
@@ -277,6 +293,17 @@ export default function Dashboard() {
               value={fmt(pendingBalance)}
               hint="Carried over · included in Outstanding"
               icon={HandCoins}
+            />
+            <StatCard
+              label="Fine"
+              value={fmt(pendingFine)}
+              hint={
+                member.pending_fine_reason
+                  ? `${member.pending_fine_reason} · in Outstanding`
+                  : 'Added to Outstanding'
+              }
+              icon={TriangleAlert}
+              tone="amber"
             />
             <StatCard
               label="Awaiting approval"

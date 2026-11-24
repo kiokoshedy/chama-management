@@ -161,6 +161,11 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ pending_balance }),
     }),
+  setMemberFine: (id, pending_fine, reason = '') =>
+    request(`/admin/members/${id}/fine`, {
+      method: 'PATCH',
+      body: JSON.stringify({ pending_fine, reason }),
+    }),
   setMemberStatus: (id, status, reason = '') =>
     request(`/admin/members/${id}/status`, {
       method: 'PATCH',
