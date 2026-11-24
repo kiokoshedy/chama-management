@@ -247,8 +247,17 @@ export default function Constitution() {
         {viewState === 'error' && (
           <div className="alert info" style={{ marginBottom: 0 }}>
             <TriangleAlert size={17} />
-            The document is published but the inline preview couldn't load. Use the View or
-            Download buttons above to read it.
+            <span>
+              The published file is no longer available on the server. Upload the document again,
+              or retry if it was just replaced.
+            </span>
+            <button
+              className="btn sm ghost"
+              style={{ marginLeft: 'auto', flexShrink: 0 }}
+              onClick={() => loadDocument().catch((e) => setUploadError(e.message))}
+            >
+              Retry
+            </button>
           </div>
         )}
       </div>

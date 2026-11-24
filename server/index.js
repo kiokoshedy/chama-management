@@ -832,9 +832,19 @@ const upload = multer({
   },
 });
 
+const clearConstitutionMeta = () => {
+  ['constitution_file', 'constitution_name', 'constitution_mime', 'constitution_size', 'constitution_updated_at'].forEach(
+    (key) => setSetting(key, '')
+  );
+};
+
 const constitutionMeta = () => {
   const filename = getSetting('constitution_file', '');
   if (!filename) return { exists: false };
+  if (!fs.existsSync(path.join(CONSTITUTION_DIR, path.basename(filename)))) {
+    clearConstitutionMeta();
+    return { exists: false };
+  }
   return {
     exists: true,
     filename,
@@ -853,14 +863,6 @@ app.get('/api/constitution/file', requireActiveUser, (req, res) => {
   const meta = constitutionMeta();
   if (!meta.exists) return res.status(404).json({ error: 'No constitution uploaded yet' });
   const filePath = path.join(CONSTITUTION_DIR, path.basename(meta.filename));
-  if (!fs.existsSync(filePath)) {
-    setSetting('constitution_file', '');
-    setSetting('constitution_name', '');
-    setSetting('constitution_mime', '');
-    setSetting('constitution_size', '');
-    setSetting('constitution_updated_at', '');
-    return res.status(404).json({ error: 'No constitution uploaded yet' });
-  }
   res.setHeader('Content-Type', meta.mime);
   res.setHeader('Cache-Control', 'private, max-age=60');
   res.setHeader(
