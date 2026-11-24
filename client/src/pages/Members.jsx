@@ -24,6 +24,7 @@ import { api } from '../api.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { Avatar } from '../components/Avatar.jsx';
 import { PageHeader, EmptyState, Segmented } from '../components/ui.jsx';
+import FinesManager from '../FinesManager.jsx';
 import { fmt, deadlineState, currency } from '../format.js';
 
 export default function Members() {
@@ -189,6 +190,8 @@ export default function Members() {
                       </span>
                       {st === 'pending' ? (
                         <span className="badge status-requested">Awaiting approval</span>
+                      ) : st === 'partial' ? (
+                        <span className="badge status-partial">Part paid</span>
                       ) : (
                         <span className="badge status-unpaid">Not paid</span>
                       )}
@@ -296,18 +299,11 @@ function MemberDrawer({ member, isAdmin, onClose, onUpdate }) {
   const [balanceDraft, setBalanceDraft] = useState(member.pending_balance ?? 0);
   const [balanceBusy, setBalanceBusy] = useState(false);
   const [balanceMsg, setBalanceMsg] = useState('');
-  const [fineDraft, setFineDraft] = useState(member.pending_fine ?? 0);
-  const [fineReasonDraft, setFineReasonDraft] = useState(member.pending_fine_reason ?? '');
-  const [fineBusy, setFineBusy] = useState(false);
-  const [fineMsg, setFineMsg] = useState('');
 
   useEffect(() => {
     setBalanceDraft(member.pending_balance ?? 0);
     setBalanceMsg('');
-    setFineDraft(member.pending_fine ?? 0);
-    setFineReasonDraft(member.pending_fine_reason ?? '');
-    setFineMsg('');
-  }, [member.id, member.pending_balance, member.pending_fine, member.pending_fine_reason]);
+  }, [member.id, member.pending_balance]);
 
   const saveBalance = async () => {
     setBalanceBusy(true);
@@ -320,24 +316,6 @@ function MemberDrawer({ member, isAdmin, onClose, onUpdate }) {
       setBalanceMsg(err.message);
     } finally {
       setBalanceBusy(false);
-    }
-  };
-
-  const saveFine = async () => {
-    setFineBusy(true);
-    setFineMsg('');
-    try {
-      const { member: updated } = await api.setMemberFine(member.id, fineDraft, fineReasonDraft);
-      onUpdate?.(updated);
-      setFineMsg(
-        updated.pending_fine > 0
-          ? 'Fine saved for this member.'
-          : 'Fine cleared for this member.'
-      );
-    } catch (err) {
-      setFineMsg(err.message);
-    } finally {
-      setFineBusy(false);
     }
   };
 
@@ -461,49 +439,15 @@ function MemberDrawer({ member, isAdmin, onClose, onUpdate }) {
           )}
 
           {isAdmin && (
-            <div className="card pad" style={{ marginBottom: 16, background: 'var(--surface-2)' }}>
-              <div className="row-between" style={{ gap: 10 }}>
-                <div>
-                  <strong>Fine</strong>
-                  <p className="muted small" style={{ marginTop: 3 }}>
-                    A fine for this member, with the reason it was given.
-                  </p>
-                </div>
-                <span className="badge pending">{fmt(Number(member.pending_fine || 0))}</span>
-              </div>
-              <div className="member-phone-edit member-fine-edit" style={{ marginTop: 12 }}>
-                <TriangleAlert size={14} />
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={fineDraft}
-                  onChange={(e) => setFineDraft(e.target.value)}
-                  placeholder="0"
-                  aria-label={`Fine for ${member.display_name}`}
-                />
-                <input
-                  value={fineReasonDraft}
-                  onChange={(e) => setFineReasonDraft(e.target.value)}
-                  placeholder="Reason (e.g. lateness)"
-                  aria-label={`Reason for ${member.display_name}'s fine`}
-                />
-                <button className="btn sm" onClick={saveFine} disabled={fineBusy}>
-                  {fineBusy ? 'Saving…' : 'Save'}
-                </button>
-              </div>
-              <p className="muted small" style={{ marginTop: 8 }}>
-                {member.pending_fine_reason
-                  ? `Reason: ${member.pending_fine_reason}. `
-                  : ''}
-                Added in full to this member’s dues. Set 0 once settled.
-              </p>
-              {fineMsg && (
-                <p className="muted small" style={{ marginTop: 8 }}>
-                  {fineMsg}
-                </p>
-              )}
-            </div>
+            <FinesManager
+              members={[member]}
+              memberId={member.id}
+              onChange={async () => {
+                const { members: rows } = await api.members();
+                onUpdate?.(rows.find((row) => row.id === member.id) || member);
+              }}
+              title="Fines for this member"
+            />
           )}
 
           {!isAdmin && member.pending_balance > 0 && (

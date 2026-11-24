@@ -18,6 +18,7 @@ import {
   CircleAlert,
   Crown,
   TriangleAlert,
+  XCircle,
 } from 'lucide-react';
 import { api } from '../api.js';
 import { useAuth } from '../context/AuthContext.jsx';
@@ -31,6 +32,7 @@ import { fmt, monthShort, timeAgo, greeting, deadlineState } from '../format.js'
 const ACTIVITY = {
   paid: { icon: CheckCircle2, tone: 'green', verb: 'payment recorded' },
   requested: { icon: Clock3, tone: 'blue', verb: 'sent payment proof' },
+  rejected: { icon: XCircle, tone: 'red', verb: 'payment was rejected' },
   unpaid: { icon: CircleAlert, tone: 'amber', verb: 'is still outstanding' },
 };
 
@@ -42,7 +44,7 @@ function buildChart(payments) {
   const totals = new Map();
   payments.forEach((p) => {
     const current = totals.get(p.period) || 0;
-    totals.set(p.period, current + (p.status === 'paid' ? Number(p.total || 0) : 0));
+    totals.set(p.period, current + (p.status === 'paid' ? Number(p.amount_paid || 0) : 0));
   });
   return [...totals.entries()]
     .sort((a, b) => a[0].localeCompare(b[0]))
@@ -55,6 +57,7 @@ export default function Dashboard() {
   const isAdmin = member.role === 'admin';
   const [payments, setPayments] = useState([]);
   const [contribs, setContribs] = useState([]);
+  const [requests, setRequests] = useState([]);
   const [members, setMembers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -63,14 +66,16 @@ export default function Dashboard() {
     let cancelled = false;
     (async () => {
       try {
-        const [paymentData, contribData, memberData] = await Promise.all([
+        const [paymentData, contribData, requestData, memberData] = await Promise.all([
           isAdmin ? api.adminPayments() : api.paymentsMe(),
           isAdmin ? api.adminContributions() : api.contributions(),
+          isAdmin ? api.adminPaymentRequests() : api.myPaymentRequests(),
           api.members(),
         ]);
         if (cancelled) return;
         setPayments(paymentData.payments);
         setContribs(contribData.contributions);
+        setRequests(requestData.requests);
         setMembers(memberData.members);
       } catch (e) {
         if (!cancelled) setError(e.message);
@@ -87,34 +92,51 @@ export default function Dashboard() {
   const chartMax = Math.max(1, ...chart.map((c) => c.value));
 
   const activity = useMemo(() => {
-    const rows = [...payments].sort((a, b) => {
-      const at = activityStamp(a) || '';
-      const bt = activityStamp(b) || '';
-      return String(bt).localeCompare(String(at));
-    });
-    return rows.slice(0, 6);
-  }, [payments]);
+    const paymentRows = payments.map((p) => ({
+      key: `payment-${p.id}`,
+      who: isAdmin ? p.display_name : p.period,
+      when: activityStamp(p),
+      status: p.status,
+      amount: Number(p.amount_paid || p.total || 0),
+      detail: monthShort(p.period),
+      verb: ACTIVITY[p.status]?.verb || ACTIVITY.unpaid.verb,
+    }));
+    const requestRows = requests.map((r) => ({
+      key: `request-${r.id}`,
+      who: isAdmin ? r.display_name : 'Your payment',
+      when: r.decided_at || r.requested_at,
+      status: r.status === 'paid' ? 'paid' : r.status === 'rejected' ? 'rejected' : 'requested',
+      amount: Number(r.amount || 0),
+      detail: `Combined request · ${r.items.length} ${r.items.length === 1 ? 'item' : 'items'}`,
+      verb:
+        r.status === 'requested'
+          ? 'sent for approval'
+          : r.status === 'paid'
+            ? 'was approved'
+            : 'was rejected',
+    }));
+    return [...paymentRows, ...requestRows]
+      .sort((a, b) => String(b.when || '').localeCompare(String(a.when || '')))
+      .slice(0, 6);
+  }, [payments, requests, isAdmin]);
 
   const totals = useMemo(() => {
-    const collected = payments
-      .filter((p) => p.status === 'paid')
-      .reduce((sum, p) => sum + Number(p.total || 0), 0);
-    const requested = payments.filter((p) => p.status === 'requested').length;
-    const unpaid = payments.filter((p) => p.status === 'unpaid').length;
-    const outstanding = payments
-      .filter((p) => p.status !== 'paid')
-      .reduce((sum, p) => sum + Number(p.total || 0), 0);
+    const collected = payments.reduce((sum, p) => sum + Number(p.amount_paid || 0), 0);
+    const requested =
+      payments.filter((p) => p.status === 'requested').length +
+      requests.filter((r) => r.status === 'requested').length +
+      contribs.filter((c) => c.mine?.state === 'pending').length;
+    const unpaid = payments.filter((p) => Number(p.balance) > 0).length;
+    const outstanding = payments.reduce((sum, p) => sum + Number(p.balance || 0), 0);
     return { collected, requested, unpaid, outstanding };
-  }, [payments]);
+  }, [payments, requests, contribs]);
 
   const currentPeriod = payments[0]?.period;
   const currentStats = useMemo(() => {
     if (!currentPeriod) return { collected: 0, paid: 0, requested: 0, unpaid: 0, members: 0 };
     const rows = payments.filter((p) => p.period === currentPeriod);
     return {
-      collected: rows
-        .filter((p) => p.status === 'paid')
-        .reduce((sum, p) => sum + Number(p.total || 0), 0),
+      collected: rows.reduce((sum, p) => sum + Number(p.amount_paid || 0), 0),
       paid: rows.filter((p) => p.status === 'paid').length,
       requested: rows.filter((p) => p.status === 'requested').length,
       unpaid: rows.filter((p) => p.status === 'unpaid').length,
@@ -122,12 +144,13 @@ export default function Dashboard() {
     };
   }, [payments, currentPeriod]);
 
+  const pendingRequests = requests.filter((r) => r.status === 'requested').length;
   const openContribs = contribs.filter((c) => c.is_active !== false);
   const openContribsOwed = isAdmin
     ? []
     : openContribs.filter((c) => c.mine?.state !== 'approved');
   const contribOutstanding = openContribsOwed.reduce(
-    (sum, c) => sum + Number(c.amount || 0),
+    (sum, c) => sum + Number(c.mine?.balance ?? c.amount ?? 0),
     0
   );
   const allMembers = members.filter((m) => m.role === 'member');
@@ -146,12 +169,29 @@ export default function Dashboard() {
   const adminContribArrears = contribs
     .filter((c) => c.is_active !== false)
     .reduce((sum, c) => {
-      const approved = (c.payments || []).filter((p) => p.status === 'approved').length;
-      const owed = Math.max(0, allMembers.length - approved);
-      return sum + owed * Number(c.amount || 0);
+      const expected = allMembers.length * Number(c.amount || 0);
+      const received = (c.payments || []).reduce(
+        (paid, p) => paid + Number(p.paid_amount ?? p.amount_paid ?? 0),
+        0
+      );
+      return sum + Math.max(0, expected - received);
     }, 0);
   const allArrears =
     totals.outstanding + carriedBalances + allFines + adminContribArrears;
+  const breakdownHint = (parts) =>
+    parts.filter(Boolean).join(' + ') || 'Everything is fully paid';
+  const adminOutstandingHint = breakdownHint([
+    adminDuesCount > 0 && `Dues (${adminDuesCount})`,
+    carriedBalances > 0 && 'Previous Arrears',
+    allFines > 0 && 'Fines',
+    adminContribArrears > 0 && 'open contributions',
+  ]);
+  const memberOutstandingHint = breakdownHint([
+    totals.unpaid > 0 && `Dues (${totals.unpaid})`,
+    pendingBalance > 0 && 'Previous Arrears',
+    pendingFine > 0 && 'Fines',
+    contribOutstanding > 0 && 'open contributions',
+  ]);
   const today = new Date().toLocaleDateString('en-GB', {
     weekday: 'long',
     day: 'numeric',
@@ -225,7 +265,7 @@ export default function Dashboard() {
             <StatCard
               label="All Arrears"
               value={fmt(allArrears)}
-              hint={`Dues (${adminDuesCount}) + Previous Arrears + Fines + open contributions`}
+              hint={adminOutstandingHint}
               icon={HandCoins}
               tone="amber"
             />
@@ -244,8 +284,12 @@ export default function Dashboard() {
             />
             <StatCard
               label="Awaiting approval"
-              value={currentStats.requested}
-              hint={currentStats.requested === 1 ? 'Request to review' : 'Requests to review'}
+              value={currentStats.requested + pendingRequests}
+              hint={
+                currentStats.requested + pendingRequests === 1
+                  ? 'Request to review'
+                  : 'Requests to review'
+              }
               icon={Clock3}
               tone="blue"
             />
@@ -284,7 +328,7 @@ export default function Dashboard() {
               value={fmt(
                 totals.outstanding + pendingBalance + pendingFine + contribOutstanding
               )}
-              hint={`Dues (${totals.unpaid}) + Previous Arrears + Fine + open contributions`}
+              hint={memberOutstandingHint}
               icon={CircleAlert}
               tone="amber"
             />
@@ -308,7 +352,7 @@ export default function Dashboard() {
             <StatCard
               label="Awaiting approval"
               value={totals.requested}
-              hint="Proof sent to your admin"
+              hint="Requests and proof sent to your admin"
               icon={Clock3}
               tone="blue"
             />
@@ -383,25 +427,25 @@ export default function Dashboard() {
               <p className="muted small">No payment activity recorded yet.</p>
             ) : (
               <div className="activity-list">
-                {activity.map((p) => {
-                  const meta = ACTIVITY[p.status] || ACTIVITY.unpaid;
+                {activity.map((row) => {
+                  const meta = ACTIVITY[row.status] || ACTIVITY.unpaid;
                   const Icon = meta.icon;
-                  const when = timeAgo(activityStamp(p));
+                  const when = timeAgo(row.when);
                   return (
-                    <div className="activity-item" key={p.id}>
+                    <div className="activity-item" key={row.key}>
                       <span className={`activity-icon ${meta.tone}`}>
                         <Icon size={16} />
                       </span>
                       <div className="activity-copy">
                         <strong>
-                          {isAdmin ? p.display_name : p.period} {meta.verb}
+                          {row.who} {row.verb}
                         </strong>
                         <span>
-                          {monthShort(p.period)} · {p.status === 'requested' ? 'awaiting approval' : p.status}
+                          {row.detail} · {row.status === 'requested' ? 'awaiting approval' : row.status}
                           {when ? ` · ${when}` : ''}
                         </span>
                       </div>
-                      <span className="activity-amount">{fmt(p.total)}</span>
+                      <span className="activity-amount">{fmt(row.amount)}</span>
                     </div>
                   );
                 })}

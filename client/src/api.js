@@ -104,6 +104,17 @@ export const api = {
     request('/proof/parse', { method: 'POST', body: JSON.stringify({ message }) }),
 
   paymentsMe: () => request('/payments/me'),
+  paymentsPending: () => request('/payments/pending'),
+  myPaymentRequests: (status = '') =>
+    request(`/payments/requests${status ? `?status=${encodeURIComponent(status)}` : ''}`),
+  payPending: (data) => request('/payments/pay', { method: 'POST', body: JSON.stringify(data) }),
+  updatePaymentRequestProof: (id, proofMessage) =>
+    request(`/payments/requests/${id}/proof`, {
+      method: 'PATCH',
+      body: JSON.stringify({ proof_message: proofMessage }),
+    }),
+  cancelPaymentRequest: (id) => request(`/payments/requests/${id}/cancel`, { method: 'POST' }),
+  myFines: () => request('/fines/me'),
   requestPayment: (id, proofMessage) =>
     request(`/payments/${id}/request`, { method: 'POST', body: JSON.stringify({ proof_message: proofMessage }) }),
   updatePaymentProof: (id, proofMessage) =>
@@ -112,11 +123,16 @@ export const api = {
   adminPayments: (qs = '') => request(`/admin/payments${qs ? '?' + qs : ''}`),
   approvePayment: (id) => request(`/admin/payments/${id}/approve`, { method: 'POST' }),
   rejectPayment: (id) => request(`/admin/payments/${id}/reject`, { method: 'POST' }),
-  finePayment: (id, amount, reason = '') =>
-    request(`/admin/payments/${id}/fine`, {
-      method: 'POST',
-      body: JSON.stringify({ amount, reason }),
-    }),
+  adminPaymentRequests: (status = '') =>
+    request(`/admin/payment-requests${status ? `?status=${encodeURIComponent(status)}` : ''}`),
+  approvePaymentRequest: (id) => request(`/admin/payment-requests/${id}/approve`, { method: 'POST' }),
+  rejectPaymentRequest: (id) => request(`/admin/payment-requests/${id}/reject`, { method: 'POST' }),
+  adminFines: (memberId = null) =>
+    request(`/admin/fines${memberId ? `?member_id=${memberId}` : ''}`),
+  createFine: (data) => request('/admin/fines', { method: 'POST', body: JSON.stringify(data) }),
+  updateFine: (id, data) =>
+    request(`/admin/fines/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  deleteFine: (id) => request(`/admin/fines/${id}`, { method: 'DELETE' }),
   setPaymentDueDate: (id, dueDate) =>
     request(`/admin/payments/${id}/due-date`, {
       method: 'PATCH',
@@ -160,11 +176,6 @@ export const api = {
     request(`/admin/members/${id}/balance`, {
       method: 'PATCH',
       body: JSON.stringify({ pending_balance }),
-    }),
-  setMemberFine: (id, pending_fine, reason = '') =>
-    request(`/admin/members/${id}/fine`, {
-      method: 'PATCH',
-      body: JSON.stringify({ pending_fine, reason }),
     }),
   setMemberStatus: (id, status, reason = '') =>
     request(`/admin/members/${id}/status`, {

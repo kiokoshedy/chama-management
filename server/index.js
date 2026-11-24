@@ -22,21 +22,39 @@ app.use(express.urlencoded({ extended: false }));
 
 const currentPeriod = () => kenyaDate().slice(0, 7);
 
-const publicMember = (m) => ({
-  id: m.id,
-  username: m.username,
-  display_name: m.display_name,
-  bio: m.bio,
-  phone: m.phone || '',
-  pending_balance: Number(m.pending_balance || 0),
-  pending_fine: Number(m.pending_fine || 0),
-  pending_fine_reason: m.pending_fine_reason || '',
-  role: m.role,
-  designation: m.designation || '',
-  status: m.status,
-  status_reason: m.status_reason || '',
-  created_at: m.created_at,
-});
+const roundMoney = (value) => Math.round(Number(value) * 100) / 100;
+const nowStamp = () => new Date().toISOString().replace('T', ' ').slice(0, 19);
+
+// Fines are independent records now. The member fields below are derived from
+// them so every screen that shows "Fine / outstanding" stays in step with the
+// fine list (including part payments).
+function finesSummary(memberId) {
+  const rows = db
+    .prepare('SELECT amount, amount_paid, reason FROM fines WHERE member_id = ? AND amount_paid < amount')
+    .all(memberId);
+  const total = rows.reduce((sum, f) => sum + Math.max(0, roundMoney(f.amount - f.amount_paid)), 0);
+  const reasons = [...new Set(rows.map((f) => String(f.reason || '').trim()).filter(Boolean))];
+  return { total: roundMoney(total), reason: reasons.join(', ').slice(0, 200) };
+}
+
+const publicMember = (m) => {
+  const fines = finesSummary(m.id);
+  return {
+    id: m.id,
+    username: m.username,
+    display_name: m.display_name,
+    bio: m.bio,
+    phone: m.phone || '',
+    pending_balance: roundMoney(m.pending_balance || 0),
+    pending_fine: fines.total,
+    pending_fine_reason: fines.reason,
+    role: m.role,
+    designation: m.designation || '',
+    status: m.status,
+    status_reason: m.status_reason || '',
+    created_at: m.created_at,
+  };
+};
 
 const memberName = (m) => ({
   id: m.id,
@@ -45,21 +63,27 @@ const memberName = (m) => ({
   designation: m.designation || '',
 });
 
-const publicPayment = (p) => ({
-  id: p.id,
-  member_id: p.member_id,
-  period: p.period,
-  amount: p.amount,
-  fine: p.fine,
-  due_date: p.due_date || null,
-  fine_reason: p.fine_reason || '',
-  total: Number(p.amount) + Number(p.fine),
-  status: p.status,
-  paid_at: p.paid_at,
-  display_name: p.display_name,
-  username: p.username,
-  proof: proofSummary(p),
-});
+const publicPayment = (p) => {
+  const total = roundMoney(Number(p.amount) + Number(p.fine || 0));
+  const paid = roundMoney(p.amount_paid || 0);
+  return {
+    id: p.id,
+    member_id: p.member_id,
+    period: p.period,
+    amount: roundMoney(p.amount),
+    fine: roundMoney(p.fine || 0),
+    due_date: p.due_date || null,
+    fine_reason: p.fine_reason || '',
+    total,
+    amount_paid: paid,
+    balance: roundMoney(Math.max(0, total - paid)),
+    status: p.status,
+    paid_at: p.paid_at,
+    display_name: p.display_name,
+    username: p.username,
+    proof: proofSummary(p),
+  };
+};
 
 // ---- Payment proof ----
 // Every "I have paid" click requires the member to paste the confirmation
@@ -100,6 +124,473 @@ function readProof(value) {
   };
 }
 
+// ---- Independent fines & combined payments ----
+
+// node:sqlite has no .transaction() helper, so use explicit BEGIN/COMMIT.
+function withTransaction(fn) {
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const result = fn();
+    db.exec('COMMIT');
+    return result;
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
+const publicFine = (f) => {
+  const amount = roundMoney(f.amount || 0);
+  const paid = roundMoney(f.amount_paid || 0);
+  const balance = roundMoney(Math.max(0, amount - paid));
+  return {
+    id: f.id,
+    member_id: f.member_id,
+    amount,
+    reason: f.reason || '',
+    amount_paid: paid,
+    balance,
+    status: balance === 0 ? 'paid' : paid > 0 ? 'partial' : 'unpaid',
+    created_at: f.created_at,
+    created_by: f.created_by || null,
+    paid_at: f.paid_at || null,
+    display_name: f.display_name || '',
+    username: f.username || '',
+  };
+};
+
+const fineQuery = `
+  SELECT f.*, m.display_name, m.username
+  FROM fines f JOIN members m ON m.id = f.member_id`;
+
+const findFine = (id) => db.prepare(`${fineQuery} WHERE f.id = ?`).get(id);
+
+function requestItems(requestId) {
+  const request = db.prepare('SELECT member_id FROM payment_requests WHERE id = ?').get(requestId);
+  const memberId = request?.member_id;
+  return db
+    .prepare('SELECT * FROM payment_request_items WHERE request_id = ? ORDER BY id')
+    .all(requestId)
+    .map((item) => {
+      let label = item.target_type;
+      let balance = null;
+      let status = 'unpaid';
+      if (item.target_type === 'monthly') {
+        const p = db.prepare('SELECT period, amount, fine, amount_paid FROM payments WHERE id = ?').get(item.target_id);
+        const total = roundMoney(Number(p?.amount || 0) + Number(p?.fine || 0));
+        balance = roundMoney(Math.max(0, total - roundMoney(p?.amount_paid || 0)));
+        status = balance === 0 ? 'paid' : roundMoney(p?.amount_paid || 0) > 0 ? 'partial' : 'unpaid';
+        label = `Monthly contribution · ${p?.period || '?'}`;
+      } else if (item.target_type === 'contribution') {
+        const c = db.prepare('SELECT title, amount, created_at FROM contributions WHERE id = ?').get(item.target_id);
+        const cp = db
+          .prepare('SELECT amount_paid, status FROM contribution_payments WHERE contribution_id = ? AND member_id = ?')
+          .get(item.target_id, memberId);
+        balance = roundMoney(Math.max(0, Number(c?.amount || 0) - roundMoney(cp?.amount_paid || 0)));
+        status = cp?.status === 'approved' || balance === 0 ? 'paid' : cp?.status === 'partial' ? 'partial' : 'unpaid';
+        label = c?.title || 'Special contribution';
+      } else if (item.target_type === 'fine') {
+        const f = db.prepare('SELECT reason, amount, amount_paid FROM fines WHERE id = ?').get(item.target_id);
+        balance = roundMoney(Math.max(0, roundMoney(f?.amount || 0) - roundMoney(f?.amount_paid || 0)));
+        status = balance === 0 ? 'paid' : roundMoney(f?.amount_paid || 0) > 0 ? 'partial' : 'unpaid';
+        label = `Fine · ${f?.reason || 'reason not given'}`;
+      } else if (item.target_type === 'arrears') {
+        const m = db.prepare('SELECT pending_balance FROM members WHERE id = ?').get(memberId);
+        balance = roundMoney(m?.pending_balance || 0);
+        status = balance > 0 ? 'unpaid' : 'paid';
+        label = 'Previous Arrears';
+      }
+      return {
+        id: item.id,
+        type: item.target_type,
+        target_id: item.target_id,
+        amount: roundMoney(item.amount),
+        balance,
+        status,
+        label,
+      };
+    });
+}
+
+const publicPaymentRequest = (r) => {
+  const row = db
+    .prepare('SELECT display_name, username FROM members WHERE id = ?')
+    .get(r.member_id);
+  return {
+    id: r.id,
+    member_id: r.member_id,
+    amount: roundMoney(r.amount),
+    status: r.status,
+    requested_at: r.requested_at,
+    decided_at: r.decided_at || null,
+    display_name: row?.display_name || '',
+    username: row?.username || '',
+    proof: proofSummary(r),
+    items: requestItems(r.id),
+  };
+};
+
+const itemKey = (type, id) => `${type}:${id ?? 0}`;
+
+// Everything a member still owes, in one list. Amounts already covered by an
+// approved payment are subtracted; amounts with a request still awaiting the
+// admin are shown but locked so they cannot be paid twice.
+function pendingItems(memberId) {
+  const allocatedRows = db
+    .prepare(
+      `SELECT pri.target_type, pri.target_id, SUM(pri.amount) AS total
+       FROM payment_request_items pri
+       JOIN payment_requests pr ON pr.id = pri.request_id
+       WHERE pr.member_id = ? AND pr.status = 'requested'
+       GROUP BY pri.target_type, pri.target_id`
+    )
+    .all(memberId);
+  const allocated = new Map(
+    allocatedRows.map((r) => [itemKey(r.target_type, r.target_id), roundMoney(r.total)])
+  );
+  const lockedValue = (type, id) => allocated.get(itemKey(type, id)) || 0;
+
+  const items = [];
+  for (const p of db
+    .prepare("SELECT * FROM payments WHERE member_id = ? AND status != 'paid' ORDER BY period ASC, id ASC")
+    .all(memberId)) {
+    const total = roundMoney(Number(p.amount) + Number(p.fine || 0));
+    const balance = roundMoney(Math.max(0, total - roundMoney(p.amount_paid || 0)));
+    if (balance <= 0) continue;
+    items.push({
+      key: itemKey('monthly', p.id),
+      type: 'monthly',
+      id: p.id,
+      label: `Monthly contribution · ${p.period}`,
+      detail: p.due_date ? `Due ${p.due_date}` : '',
+      amount: total,
+      outstanding: balance,
+      status: p.status === 'requested' ? 'requested' : 'unpaid',
+      locked: lockedValue('monthly', p.id) > 0 || p.status === 'requested',
+    });
+  }
+
+  for (const c of db
+    .prepare("SELECT * FROM contributions WHERE is_active = 1 ORDER BY created_at ASC, id ASC")
+    .all()) {
+    const cp = db
+      .prepare('SELECT * FROM contribution_payments WHERE contribution_id = ? AND member_id = ?')
+      .get(c.id, memberId);
+    if (cp && cp.status === 'approved') continue;
+    const paid = roundMoney(cp?.amount_paid || 0);
+    const balance = roundMoney(Math.max(0, Number(c.amount) - paid));
+    if (balance <= 0) continue;
+    items.push({
+      key: itemKey('contribution', c.id),
+      type: 'contribution',
+      id: c.id,
+      label: c.title,
+      detail: `Deadline ${c.deadline}`,
+      amount: roundMoney(c.amount),
+      outstanding: balance,
+      status: cp?.status === 'pending' ? 'requested' : 'unpaid',
+      locked: lockedValue('contribution', c.id) > 0 || cp?.status === 'pending',
+    });
+  }
+
+  for (const f of db
+    .prepare('SELECT * FROM fines WHERE member_id = ? AND amount_paid < amount ORDER BY created_at ASC, id ASC')
+    .all(memberId)) {
+    const balance = roundMoney(Math.max(0, f.amount - f.amount_paid));
+    if (balance <= 0) continue;
+    items.push({
+      key: itemKey('fine', f.id),
+      type: 'fine',
+      id: f.id,
+      label: `Fine · ${f.reason || 'reason not given'}`,
+      detail: `Added ${String(f.created_at).slice(0, 10)}`,
+      amount: roundMoney(f.amount),
+      outstanding: balance,
+      status: f.amount_paid > 0 ? 'partial' : 'unpaid',
+      locked: lockedValue('fine', f.id) > 0,
+    });
+  }
+
+  const member = db.prepare('SELECT pending_balance FROM members WHERE id = ?').get(memberId);
+  const arrears = roundMoney(member?.pending_balance || 0);
+  if (arrears > 0) {
+    items.push({
+      key: itemKey('arrears', 0),
+      type: 'arrears',
+      id: 0,
+      label: 'Previous Arrears',
+      detail: 'Carried over from before',
+      amount: arrears,
+      outstanding: arrears,
+      status: 'unpaid',
+      locked: lockedValue('arrears', 0) > 0,
+    });
+  }
+  return items;
+}
+
+// Apply an approved request to the underlying amounts. Oldest dues are cleared
+// first and only the money the member actually sent is allocated, so a part
+// payment leaves the remainder on the newer items instead of marking all paid.
+function applyAllocations(requestId, adminId, normalizeItems = false) {
+  const request = db.prepare('SELECT * FROM payment_requests WHERE id = ?').get(requestId);
+  const ageKey = (item) => {
+    if (item.target_type === 'monthly') {
+      const p = db.prepare('SELECT created_at, period FROM payments WHERE id = ?').get(item.target_id);
+      return `${p?.created_at || p?.period || ''}|${item.id}`;
+    }
+    if (item.target_type === 'contribution') {
+      const c = db.prepare('SELECT created_at FROM contributions WHERE id = ?').get(item.target_id);
+      return `${c?.created_at || ''}|${item.id}`;
+    }
+    if (item.target_type === 'fine') {
+      const f = db.prepare('SELECT created_at FROM fines WHERE id = ?').get(item.target_id);
+      return `${f?.created_at || ''}|${item.id}`;
+    }
+    return `9999|${item.id}`;
+  };
+  const items = db
+    .prepare('SELECT * FROM payment_request_items WHERE request_id = ?')
+    .all(requestId)
+    .sort((a, b) => ageKey(a).localeCompare(ageKey(b)));
+  const paidAt = nowStamp();
+  let remaining = roundMoney(request?.amount || 0);
+  const recordApplied = (item, applied) => {
+    if (normalizeItems) {
+      db.prepare('UPDATE payment_request_items SET amount = ? WHERE id = ?').run(applied, item.id);
+    }
+  };
+
+  for (const item of items) {
+    if (remaining <= 0) {
+      recordApplied(item, 0);
+      continue;
+    }
+    let applied = 0;
+
+    if (item.target_type === 'monthly') {
+      const p = db.prepare('SELECT * FROM payments WHERE id = ?').get(item.target_id);
+      if (!p) {
+        recordApplied(item, applied);
+        continue;
+      }
+      const total = roundMoney(Number(p.amount) + Number(p.fine || 0));
+      const alreadyPaid = roundMoney(p.amount_paid || 0);
+      applied = Math.min(roundMoney(item.amount), Math.max(0, total - alreadyPaid), remaining);
+      if (applied <= 0) {
+        recordApplied(item, applied);
+        continue;
+      }
+      const paid = roundMoney(alreadyPaid + applied);
+      db.prepare('UPDATE payments SET amount_paid = ?, status = ?, paid_at = ? WHERE id = ?').run(
+        paid,
+        paid >= total ? 'paid' : 'partial',
+        paid >= total ? p.paid_at || paidAt : p.paid_at,
+        p.id
+      );
+    } else if (item.target_type === 'contribution') {
+      // A combined request targets the contribution itself, so it works even if
+      // the member never used the older "I have paid" contribution flow.
+      const contribution = db.prepare('SELECT * FROM contributions WHERE id = ?').get(item.target_id);
+      if (!contribution) {
+        recordApplied(item, applied);
+        continue;
+      }
+      let cp = db
+        .prepare('SELECT * FROM contribution_payments WHERE contribution_id = ? AND member_id = ?')
+        .get(item.target_id, request.member_id);
+      if (!cp) {
+        db.prepare(
+          `INSERT INTO contribution_payments
+             (contribution_id, member_id, status, paid_at,
+              proof_message, proof_provider, proof_amount, proof_code,
+              proof_date, proof_time, proof_account, proof_received_at)
+           VALUES (?, ?, 'partial', ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(
+          item.target_id,
+          request.member_id,
+          request.requested_at || paidAt,
+          request.proof_message || '',
+          request.proof_provider || '',
+          request.proof_amount ?? null,
+          request.proof_code || '',
+          request.proof_date || null,
+          request.proof_time || '',
+          request.proof_account || '',
+          request.proof_received_at || request.requested_at || paidAt
+        );
+        cp = db
+          .prepare('SELECT * FROM contribution_payments WHERE contribution_id = ? AND member_id = ?')
+          .get(item.target_id, request.member_id);
+      }
+      const total = roundMoney(contribution.amount || 0);
+      const alreadyPaid = roundMoney(cp.amount_paid || 0);
+      applied = Math.min(roundMoney(item.amount), Math.max(0, total - alreadyPaid), remaining);
+      if (applied <= 0) {
+        recordApplied(item, applied);
+        continue;
+      }
+      const paid = roundMoney(alreadyPaid + applied);
+      const complete = paid >= total;
+      db.prepare(
+        `UPDATE contribution_payments
+         SET amount_paid = ?, status = ?, paid_at = ?, approved_at = ?, approved_by = ?
+         WHERE id = ?`
+      ).run(
+        paid,
+        complete ? 'approved' : 'partial',
+        cp.paid_at || request.requested_at || paidAt,
+        complete ? cp.approved_at || paidAt : cp.approved_at,
+        complete ? cp.approved_by || adminId : cp.approved_by,
+        cp.id
+      );
+    } else if (item.target_type === 'fine') {
+      const f = db.prepare('SELECT * FROM fines WHERE id = ?').get(item.target_id);
+      if (!f) {
+        recordApplied(item, applied);
+        continue;
+      }
+      const total = roundMoney(f.amount);
+      const alreadyPaid = roundMoney(f.amount_paid || 0);
+      applied = Math.min(roundMoney(item.amount), Math.max(0, total - alreadyPaid), remaining);
+      if (applied <= 0) {
+        recordApplied(item, applied);
+        continue;
+      }
+      const paid = roundMoney(alreadyPaid + applied);
+      db.prepare('UPDATE fines SET amount_paid = ?, paid_at = ? WHERE id = ?').run(
+        paid,
+        paid >= total ? f.paid_at || paidAt : f.paid_at,
+        f.id
+      );
+    } else if (item.target_type === 'arrears') {
+      const member = db.prepare('SELECT pending_balance FROM members WHERE id = ?').get(request.member_id);
+      if (!member) {
+        recordApplied(item, applied);
+        continue;
+      }
+      const outstanding = roundMoney(member.pending_balance || 0);
+      applied = Math.min(roundMoney(item.amount), outstanding, remaining);
+      if (applied <= 0) {
+        recordApplied(item, applied);
+        continue;
+      }
+      const balance = roundMoney(outstanding - applied);
+      db.prepare('UPDATE members SET pending_balance = ? WHERE id = ?').run(balance, request.member_id);
+    }
+
+    remaining = roundMoney(remaining - applied);
+    recordApplied(item, applied);
+  }
+}
+
+// Earlier builds stored the full selected balance as the request amount even
+// when the proof message said the member sent less, then applied every item in
+// full. Rebuild those requests once using the amount actually sent so an old
+// KSh 7,500 payment for five KSh 11,000 dues leaves KSh 3,500 outstanding.
+function repairApprovedAllocations() {
+  if (getSetting('approved_allocations_rebuilt_v2', '') === '1') return;
+  const requests = db
+    .prepare("SELECT * FROM payment_requests WHERE status = 'paid' ORDER BY requested_at ASC, id ASC")
+    .all();
+  if (requests.length === 0) {
+    setSetting('approved_allocations_rebuilt_v2', '1');
+    return;
+  }
+
+  const undo = (item) => {
+    const amount = roundMoney(item.amount || 0);
+    if (item.target_type === 'monthly') {
+      const p = db.prepare('SELECT * FROM payments WHERE id = ?').get(item.target_id);
+      if (!p) return;
+      const total = roundMoney(Number(p.amount) + Number(p.fine || 0));
+      const paid = roundMoney(Math.max(0, roundMoney(p.amount_paid || 0) - amount));
+      const complete = paid >= total;
+      db.prepare('UPDATE payments SET amount_paid = ?, status = ?, paid_at = ? WHERE id = ?').run(
+        paid,
+        complete ? 'paid' : paid > 0 ? 'partial' : 'unpaid',
+        complete ? p.paid_at || nowStamp() : paid > 0 ? p.paid_at : null,
+        p.id
+      );
+    } else if (item.target_type === 'contribution') {
+      const c = db.prepare('SELECT amount FROM contributions WHERE id = ?').get(item.target_id);
+      const cp = db
+        .prepare('SELECT * FROM contribution_payments WHERE contribution_id = ? AND member_id = ?')
+        .get(item.target_id, item.member_id);
+      if (!c || !cp) return;
+      const paid = roundMoney(Math.max(0, roundMoney(cp.amount_paid || 0) - amount));
+      const complete = paid >= roundMoney(c.amount || 0);
+      db.prepare('UPDATE contribution_payments SET amount_paid = ?, status = ? WHERE id = ?').run(
+        paid,
+        complete ? 'approved' : paid > 0 ? 'partial' : 'unpaid',
+        cp.id
+      );
+    } else if (item.target_type === 'fine') {
+      const f = db.prepare('SELECT * FROM fines WHERE id = ?').get(item.target_id);
+      if (!f) return;
+      const paid = roundMoney(Math.max(0, roundMoney(f.amount_paid || 0) - amount));
+      db.prepare('UPDATE fines SET amount_paid = ?, paid_at = ? WHERE id = ?').run(
+        paid,
+        paid >= roundMoney(f.amount) ? f.paid_at || nowStamp() : paid > 0 ? f.paid_at : null,
+        f.id
+      );
+    } else if (item.target_type === 'arrears') {
+      const member = db.prepare('SELECT pending_balance FROM members WHERE id = ?').get(item.member_id);
+      if (!member) return;
+      db.prepare('UPDATE members SET pending_balance = ? WHERE id = ?').run(
+        roundMoney(roundMoney(member.pending_balance || 0) + amount),
+        item.member_id
+      );
+    }
+  };
+
+  withTransaction(() => {
+    // Keep the old item amounts for the reversal — they are what was actually
+    // applied. Then trust the parsed proof when it is lower than the stored
+    // total; that is the money the member really sent.
+    const originalItems = requests.map((request) => ({
+      request,
+      items: db
+        .prepare('SELECT * FROM payment_request_items WHERE request_id = ?')
+        .all(request.id)
+        .map((item) => ({ ...item, member_id: request.member_id })),
+    }));
+    const corrected = db
+      .prepare(
+        `SELECT id, ROUND(proof_amount, 2) AS amount
+         FROM payment_requests
+         WHERE proof_amount > 0 AND ROUND(proof_amount, 2) < ROUND(amount, 2)`
+      )
+      .all();
+    const correctedIds = new Set(corrected.map((r) => r.id));
+    if (corrected.length) {
+      const update = db.prepare('UPDATE payment_requests SET amount = ? WHERE id = ?');
+      corrected.forEach((r) => update.run(r.amount, r.id));
+    }
+
+    for (const { items } of originalItems) items.forEach(undo);
+    for (const request of requests) applyAllocations(request.id, request.decided_by, true);
+
+    // Waiting/rejected requests are not applied, but their item list should
+    // still add up to the amount the member actually sent.
+    for (const id of correctedIds) {
+      if (requests.some((r) => r.id === id)) continue;
+      const request = db.prepare('SELECT amount FROM payment_requests WHERE id = ?').get(id);
+      let remaining = roundMoney(request?.amount || 0);
+      const rows = db
+        .prepare('SELECT * FROM payment_request_items WHERE request_id = ? ORDER BY id')
+        .all(id);
+      for (const item of rows) {
+        const part = roundMoney(Math.min(roundMoney(item.amount), remaining));
+        db.prepare('UPDATE payment_request_items SET amount = ? WHERE id = ?').run(part, item.id);
+        remaining = roundMoney(remaining - part);
+      }
+    }
+    setSetting('approved_allocations_rebuilt_v2', '1');
+  });
+}
+
+repairApprovedAllocations();
 
 // Admin accounts manage the portal and are not group members, so they never
 // carry monthly contribution records.
@@ -354,8 +845,6 @@ const constitutionMeta = () => {
   };
 };
 
-const nowStamp = () => new Date().toISOString().replace('T', ' ').slice(0, 19);
-
 app.get('/api/constitution', requireActiveUser, (req, res) => {
   res.json(constitutionMeta());
 });
@@ -562,6 +1051,122 @@ app.get('/api/payments/me', requireActiveMember, (req, res) => {
   res.json({ payments: rows.map(publicPayment) });
 });
 
+// ---- Paying several pending amounts at once ----
+
+app.get('/api/payments/pending', requireActiveMember, (req, res) => {
+  ensureCurrentPayment(req.member.id);
+  const items = pendingItems(req.member.id);
+  res.json({
+    items,
+    total_outstanding: roundMoney(items.reduce((sum, item) => sum + item.outstanding, 0)),
+  });
+});
+
+app.post('/api/payments/pay', requireActiveMember, (req, res) => {
+  const { items, amount, proof_message } = req.body || {};
+  if (!Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ error: 'Choose at least one pending amount to pay' });
+  }
+  const available = pendingItems(req.member.id);
+  const byKey = new Map(available.map((item) => [item.key, item]));
+  const selected = [];
+  const seen = new Set();
+  for (const choice of items) {
+    const key = itemKey(choice?.type, choice?.id);
+    const item = byKey.get(key);
+    if (!item) {
+      return res.status(400).json({ error: 'One of the selected amounts is no longer pending' });
+    }
+    if (item.locked) {
+      return res.status(400).json({ error: `${item.label} already has a payment awaiting approval` });
+    }
+    if (!seen.has(key)) {
+      seen.add(key);
+      selected.push(item);
+    }
+  }
+  const paid = roundMoney(Number(amount));
+  if (!Number.isFinite(paid) || paid <= 0) {
+    return res.status(400).json({ error: 'Enter a valid amount paid' });
+  }
+  const selectable = roundMoney(selected.reduce((sum, item) => sum + item.outstanding, 0));
+  if (paid > selectable) {
+    return res.status(400).json({
+      error: `The amount is more than the ${fmtSelectable(selectable)} selected. Pay at most ${fmtSelectable(selectable)} or select another amount.`,
+    });
+  }
+  const { error, proof } = readProof(proof_message);
+  if (error) return res.status(400).json({ error });
+
+  const id = withTransaction(() => {
+    const info = db
+      .prepare('INSERT INTO payment_requests (member_id, amount, proof_message, proof_provider, proof_amount, proof_code, proof_date, proof_time, proof_account, proof_received_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\'))')
+      .run(req.member.id, paid, ...proof);
+    const requestId = info.lastInsertRowid;
+    const addItem = db.prepare(
+      'INSERT INTO payment_request_items (request_id, target_type, target_id, amount) VALUES (?, ?, ?, ?)'
+    );
+    let remaining = paid;
+    for (const item of selected) {
+      if (remaining <= 0) break;
+      const part = Math.min(remaining, item.outstanding);
+      addItem.run(requestId, item.type, item.id || null, roundMoney(part));
+      remaining = roundMoney(remaining - part);
+    }
+    return requestId;
+  });
+  res.status(201).json({ request: publicPaymentRequest(db.prepare('SELECT * FROM payment_requests WHERE id = ?').get(id)) });
+});
+
+// Members need to see their own combined requests too — the dashboard would
+// otherwise only count the older monthly "I have paid" rows.
+app.get('/api/payments/requests', requireActiveMember, (req, res) => {
+  const status = req.query.status ? String(req.query.status) : null;
+  const rows = db
+    .prepare(
+      `SELECT * FROM payment_requests WHERE member_id = ?
+       ${status ? 'AND status = ?' : ''}
+       ORDER BY requested_at DESC, id DESC`
+    )
+    .all(...(status ? [req.member.id, status] : [req.member.id]));
+  res.json({ requests: rows.map(publicPaymentRequest) });
+});
+
+const fmtSelectable = (value) => `KSh ${Number(value).toLocaleString('en-KE')}`;
+
+// A member may fix the proof or withdraw the whole request while it is waiting.
+app.patch('/api/payments/requests/:id/proof', requireActiveMember, (req, res) => {
+  const row = db.prepare('SELECT * FROM payment_requests WHERE id = ?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'Payment request not found' });
+  if (row.member_id !== req.member.id) return res.status(403).json({ error: 'This is not your payment request' });
+  if (row.status !== 'requested') return res.status(400).json({ error: 'This request is no longer awaiting approval' });
+  const { error, proof } = readProof(req.body?.proof_message);
+  if (error) return res.status(400).json({ error });
+  db.prepare(
+    `UPDATE payment_requests
+     SET proof_message = ?, proof_provider = ?, proof_amount = ?, proof_code = ?,
+         proof_date = ?, proof_time = ?, proof_account = ?, proof_received_at = datetime('now')
+     WHERE id = ?`
+  ).run(...proof, row.id);
+  res.json({ request: publicPaymentRequest(db.prepare('SELECT * FROM payment_requests WHERE id = ?').get(row.id)) });
+});
+
+app.post('/api/payments/requests/:id/cancel', requireActiveMember, (req, res) => {
+  const row = db.prepare('SELECT * FROM payment_requests WHERE id = ?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'Payment request not found' });
+  if (row.member_id !== req.member.id) return res.status(403).json({ error: 'This is not your payment request' });
+  if (row.status !== 'requested') return res.status(400).json({ error: 'This request is no longer awaiting approval' });
+  db.prepare('DELETE FROM payment_requests WHERE id = ?').run(row.id);
+  res.json({ ok: true });
+});
+
+app.get('/api/fines/me', requireActiveMember, (req, res) => {
+  const rows = db
+    .prepare('SELECT * FROM fines WHERE member_id = ? ORDER BY created_at DESC, id DESC')
+    .all(req.member.id);
+  res.json({ fines: rows.map(publicFine) });
+});
+
 app.post('/api/payments/:id/request', requireActiveMember, (req, res) => {
   const payment = db.prepare('SELECT * FROM payments WHERE id = ?').get(req.params.id);
   if (!payment) return res.status(404).json({ error: 'Payment not found' });
@@ -640,7 +1245,16 @@ app.post('/api/admin/payments/:id/approve', requireActiveAdmin, (req, res) => {
   const payment = db.prepare('SELECT * FROM payments WHERE id = ?').get(req.params.id);
   if (!payment) return res.status(404).json({ error: 'Payment not found' });
   if (payment.status === 'paid') return res.status(400).json({ error: 'Payment is already paid' });
-  db.prepare("UPDATE payments SET status = 'paid', paid_at = datetime('now') WHERE id = ?").run(
+  const total = roundMoney(Number(payment.amount) + Number(payment.fine || 0));
+  const sent = roundMoney(payment.proof_amount || 0);
+  if (sent > 0 && sent < total) {
+    return res.status(400).json({ error: `The message says KSh ${sent.toLocaleString('en-KE')} was sent for a KSh ${total.toLocaleString('en-KE')} payment. Ask the member to use Pay now and enter the amount they actually paid.` });
+  }
+  if (roundMoney(payment.amount_paid || 0) > 0 && roundMoney(payment.amount_paid || 0) < total) {
+    return res.status(400).json({ error: 'This payment is part paid. Approved part payments cannot be completed here — ask the member to use Pay now for the balance.' });
+  }
+  db.prepare("UPDATE payments SET status = 'paid', amount_paid = ?, paid_at = datetime('now') WHERE id = ?").run(
+    total,
     payment.id
   );
   const updated = db.prepare('SELECT * FROM payments WHERE id = ?').get(payment.id);
@@ -679,16 +1293,96 @@ app.patch('/api/admin/payments/:id/due-date', requireActiveAdmin, (req, res) => 
   res.json({ payment: publicPayment(updated) });
 });
 
-app.post('/api/admin/payments/:id/fine', requireActiveAdmin, (req, res) => {
+// ---- Combined payment requests & independent fines (admin) ----
+
+app.get('/api/admin/payment-requests', requireActiveAdmin, (req, res) => {
+  const status = req.query.status ? String(req.query.status) : null;
+  const rows = db
+    .prepare(
+      `SELECT * FROM payment_requests ${status ? 'WHERE status = ?' : ''}
+       ORDER BY CASE status WHEN 'requested' THEN 0 ELSE 1 END, requested_at DESC, id DESC`
+    )
+    .all(...(status ? [status] : []));
+  res.json({ requests: rows.map(publicPaymentRequest) });
+});
+
+app.post('/api/admin/payment-requests/:id/approve', requireActiveAdmin, (req, res) => {
+  const row = db.prepare('SELECT * FROM payment_requests WHERE id = ?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'Payment request not found' });
+  if (row.status !== 'requested') return res.status(400).json({ error: 'This request is no longer awaiting approval' });
+  withTransaction(() => {
+    applyAllocations(row.id, req.member.id);
+    db.prepare("UPDATE payment_requests SET status = 'paid', decided_at = datetime('now'), decided_by = ? WHERE id = ?").run(
+      req.member.id,
+      row.id
+    );
+  });
+  res.json({ request: publicPaymentRequest(db.prepare('SELECT * FROM payment_requests WHERE id = ?').get(row.id)) });
+});
+
+app.post('/api/admin/payment-requests/:id/reject', requireActiveAdmin, (req, res) => {
+  const row = db.prepare('SELECT * FROM payment_requests WHERE id = ?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'Payment request not found' });
+  if (row.status !== 'requested') return res.status(400).json({ error: 'This request is no longer awaiting approval' });
+  db.prepare("UPDATE payment_requests SET status = 'rejected', decided_at = datetime('now'), decided_by = ? WHERE id = ?").run(
+    req.member.id,
+    row.id
+  );
+  res.json({ request: publicPaymentRequest(db.prepare('SELECT * FROM payment_requests WHERE id = ?').get(row.id)) });
+});
+
+app.get('/api/admin/fines', requireActiveAdmin, (req, res) => {
+  const memberId = req.query.member_id ? Number(req.query.member_id) : null;
+  const rows = db
+    .prepare(`${fineQuery} ${memberId ? 'WHERE f.member_id = ?' : ''} ORDER BY f.created_at DESC, f.id DESC`)
+    .all(...(memberId ? [memberId] : []));
+  res.json({ fines: rows.map(publicFine) });
+});
+
+app.post('/api/admin/fines', requireActiveAdmin, (req, res) => {
+  const { member_id, amount, reason } = req.body || {};
+  const target = db.prepare("SELECT * FROM members WHERE id = ? AND role = 'member'").get(member_id);
+  if (!target) return res.status(404).json({ error: 'Member not found' });
+  const fine = roundMoney(Number(amount));
+  if (!Number.isFinite(fine) || fine <= 0) return res.status(400).json({ error: 'Enter a fine amount greater than zero' });
+  const text = String(reason || '').trim().slice(0, 200);
+  if (!text) return res.status(400).json({ error: 'Give a reason for the fine (e.g. arrived late, missed a meeting)' });
+  const info = db
+    .prepare('INSERT INTO fines (member_id, amount, reason, created_by) VALUES (?, ?, ?, ?)')
+    .run(target.id, fine, text, req.member.id);
+  res.status(201).json({ fine: publicFine(findFine(info.lastInsertRowid)) });
+});
+
+app.patch('/api/admin/fines/:id', requireActiveAdmin, (req, res) => {
+  const fine = findFine(req.params.id);
+  if (!fine) return res.status(404).json({ error: 'Fine not found' });
   const { amount, reason } = req.body || {};
-  const fine = Number(amount);
-  if (Number.isNaN(fine) || fine < 0) return res.status(400).json({ error: 'Invalid fine amount' });
-  const payment = db.prepare('SELECT * FROM payments WHERE id = ?').get(req.params.id);
-  if (!payment) return res.status(404).json({ error: 'Payment not found' });
-  const reasonText = reason == null ? '' : String(reason).trim().slice(0, 200);
-  db.prepare('UPDATE payments SET fine = ?, fine_reason = ? WHERE id = ?').run(fine, reasonText, payment.id);
-  const updated = db.prepare('SELECT * FROM payments WHERE id = ?').get(payment.id);
-  res.json({ payment: publicPayment(updated) });
+  const nextAmount = amount === undefined ? roundMoney(fine.amount) : roundMoney(Number(amount));
+  if (!Number.isFinite(nextAmount) || nextAmount <= 0) {
+    return res.status(400).json({ error: 'Enter a fine amount greater than zero' });
+  }
+  if (nextAmount < roundMoney(fine.amount_paid)) {
+    return res.status(400).json({ error: 'The fine cannot be less than the amount already paid' });
+  }
+  const nextReason = reason === undefined ? fine.reason : String(reason).trim().slice(0, 200);
+  if (!nextReason) return res.status(400).json({ error: 'Give a reason for the fine' });
+  db.prepare('UPDATE fines SET amount = ?, reason = ?, paid_at = CASE WHEN ? <= amount_paid THEN COALESCE(paid_at, datetime(\'now\')) ELSE paid_at END WHERE id = ?').run(
+    nextAmount,
+    nextReason,
+    nextAmount,
+    fine.id
+  );
+  res.json({ fine: publicFine(findFine(fine.id)) });
+});
+
+app.delete('/api/admin/fines/:id', requireActiveAdmin, (req, res) => {
+  const fine = findFine(req.params.id);
+  if (!fine) return res.status(404).json({ error: 'Fine not found' });
+  if (roundMoney(fine.amount_paid) > 0) {
+    return res.status(400).json({ error: 'A part-paid fine cannot be deleted' });
+  }
+  db.prepare('DELETE FROM fines WHERE id = ?').run(fine.id);
+  res.json({ ok: true });
 });
 
 // ---- Payments: month export ----
@@ -735,19 +1429,30 @@ const MONTHLY_STATUS_LABELS = {
   paid: 'Paid',
   requested: 'Awaiting approval',
   unpaid: 'Not paid',
+  partial: 'Part paid',
 };
 
-const CONTRIB_STATUS_LABELS = { approved: 'Approved', pending: 'Awaiting approval' };
+const CONTRIB_STATUS_LABELS = {
+  approved: 'Approved',
+  pending: 'Awaiting approval',
+  partial: 'Part paid',
+};
 
 const MONTHLY_HEADER = [
-  'Member', 'Username', 'Phone', 'Contribution', 'Fine', 'Fine reason', 'Total',
+  'Member', 'Username', 'Phone', 'Contribution', 'Total', 'Paid amount', 'Balance',
   'Status', 'Due date', 'Paid at', 'Proof from', 'Proof reference',
   'Proof amount', 'Proof date',
 ];
 
 const SPECIAL_HEADER = [
-  'Contribution', 'Deadline', 'Member', 'Username', 'Phone', 'Amount', 'Status',
-  'Paid at', 'Approved at', 'Proof from', 'Proof reference', 'Proof amount', 'Proof date',
+  'Contribution', 'Deadline', 'Member', 'Username', 'Phone', 'Amount', 'Paid amount',
+  'Balance', 'Status', 'Paid at', 'Approved at', 'Proof from', 'Proof reference',
+  'Proof amount', 'Proof date',
+];
+
+const FINE_HEADER = [
+  'Member', 'Username', 'Reason', 'Amount', 'Paid amount', 'Balance', 'Status',
+  'Given on', 'Paid at',
 ];
 
 const fetchMonthlyRows = (period, memberId) =>
@@ -766,7 +1471,7 @@ const fetchSpecialRows = (period, memberId) =>
     .prepare(
       `SELECT c.title, c.amount, c.deadline,
               m.display_name, m.username, m.phone,
-              cp.status AS cp_status, cp.paid_at, cp.approved_at,
+              cp.status AS cp_status, cp.amount_paid AS cp_amount_paid, cp.paid_at, cp.approved_at,
               cp.proof_provider, cp.proof_amount, cp.proof_code, cp.proof_date
        FROM contributions c
        CROSS JOIN members m
@@ -789,11 +1494,9 @@ function monthCsv(period, memberId) {
 
   // ---- Monthly contributions ----
   const billed = monthly.reduce((sum, p) => sum + Number(p.amount) + Number(p.fine || 0), 0);
-  const collected = monthly
-    .filter((p) => p.status === 'paid')
-    .reduce((sum, p) => sum + Number(p.amount) + Number(p.fine || 0), 0);
+  const collected = monthly.reduce((sum, p) => sum + roundMoney(p.amount_paid || 0), 0);
   const pendingCount = monthly.filter((p) => p.status === 'requested').length;
-  const unpaidCount = monthly.filter((p) => p.status === 'unpaid').length;
+  const unpaidCount = monthly.filter((p) => p.status !== 'paid' && p.status !== 'requested').length;
 
   rows.push(['Monthly contributions']);
   rows.push(['Members', String(monthly.length)]);
@@ -810,9 +1513,9 @@ function monthCsv(period, memberId) {
       p.username,
       p.phone || '',
       Number(p.amount),
-      Number(p.fine || 0),
-      p.fine_reason || '',
-      Number(p.amount) + Number(p.fine || 0),
+      roundMoney(Number(p.amount) + Number(p.fine || 0)),
+      roundMoney(p.amount_paid || 0),
+      roundMoney(Math.max(0, Number(p.amount) + Number(p.fine || 0) - roundMoney(p.amount_paid || 0))),
       MONTHLY_STATUS_LABELS[p.status] || p.status,
       p.due_date || '',
       p.paid_at || '',
@@ -823,13 +1526,12 @@ function monthCsv(period, memberId) {
     ]);
   }
   rows.push(['Total collected', '', '', '', '', '', collected, '', '', '', '', '', '', '']);
+
   rows.push(blankRow(MONTHLY_HEADER.length));
 
   // ---- Special contributions due this month ----
   const titles = [...new Set(special.map((s) => s.title))];
-  const approvedTotal = special
-    .filter((s) => s.cp_status === 'approved')
-    .reduce((sum, s) => sum + Number(s.amount), 0);
+  const approvedTotal = special.reduce((sum, s) => sum + roundMoney(s.cp_amount_paid || 0), 0);
 
   rows.push(['Special contributions due this month']);
   if (titles.length === 0) {
@@ -847,6 +1549,8 @@ function monthCsv(period, memberId) {
         s.username,
         s.phone || '',
         Number(s.amount),
+        roundMoney(s.cp_amount_paid || 0),
+        roundMoney(Math.max(0, Number(s.amount) - roundMoney(s.cp_amount_paid || 0))),
         (s.cp_status && CONTRIB_STATUS_LABELS[s.cp_status]) || 'Not paid',
         s.paid_at || '',
         s.approved_at || '',
@@ -857,8 +1561,41 @@ function monthCsv(period, memberId) {
       ]);
     }
     rows.push([
-      'Total approved', '', '', '', '', approvedTotal, '', '', '', '', '', '', '',
+      'Total approved', '', '', '', '', approvedTotal, '', '', '', '', '', '', '', '', '',
     ]);
+  }
+  rows.push(blankRow(FINE_HEADER.length));
+
+  // ---- Independent fines given this month ----
+  const fines = db
+    .prepare(
+      `SELECT f.*, m.display_name, m.username
+       FROM fines f JOIN members m ON m.id = f.member_id
+       WHERE substr(f.created_at, 1, 7) = ?${memberId ? ' AND f.member_id = ?' : ''}
+       ORDER BY f.created_at DESC`
+    )
+    .all(...(memberId ? [period, memberId] : [period]));
+  rows.push(['Fines given this month']);
+  if (fines.length === 0) {
+    rows.push(['None given this month']);
+  } else {
+    rows.push(['Total fined', roundMoney(fines.reduce((sum, f) => sum + Number(f.amount), 0))]);
+    rows.push(['Outstanding', roundMoney(fines.reduce((sum, f) => sum + Math.max(0, f.amount - f.amount_paid), 0))]);
+    rows.push(FINE_HEADER);
+    for (const f of fines) {
+      const balance = roundMoney(Math.max(0, f.amount - f.amount_paid));
+      rows.push([
+        f.display_name,
+        f.username,
+        f.reason,
+        roundMoney(f.amount),
+        roundMoney(f.amount_paid || 0),
+        balance,
+        balance === 0 ? 'Paid' : f.amount_paid > 0 ? 'Part paid' : 'Unpaid',
+        f.created_at,
+        f.paid_at || '',
+      ]);
+    }
   }
 
   return csvDocument(rows);
@@ -897,12 +1634,18 @@ app.get('/api/payments/me/export', requireActiveMember, (req, res) => {
 
 const parseDeadline = (v) => parseDateOnly(v);
 
-const mineContribution = (c, row) => ({
-  state: row ? row.status : 'unpaid',
-  paid_at: row ? row.paid_at : null,
-  approved_at: row ? row.approved_at : null,
-  proof: row ? proofSummary(row) : null,
-});
+const mineContribution = (c, row) => {
+  const paid = roundMoney(row?.amount_paid || 0);
+  const total = roundMoney(c.amount || 0);
+  return {
+    state: row ? row.status : 'unpaid',
+    paid_at: row ? row.paid_at : null,
+    approved_at: row ? row.approved_at : null,
+    paid_amount: paid,
+    balance: roundMoney(Math.max(0, total - paid)),
+    proof: row ? proofSummary(row) : null,
+  };
+};
 
 const publicContribution = (c, mine) => ({
   id: c.id,
@@ -1027,6 +1770,8 @@ app.get('/api/admin/contributions', requireActiveAdmin, (req, res) => {
           status: p.status,
           paid_at: p.paid_at,
           approved_at: p.approved_at,
+          paid_amount: roundMoney(p.amount_paid || 0),
+          balance: roundMoney(Math.max(0, Number(c.amount) - roundMoney(p.amount_paid || 0))),
           proof: proofSummary(p),
         })),
         stats: {
@@ -1097,9 +1842,18 @@ app.post('/api/admin/contributions/:id/payments/:pid/approve', requireActiveAdmi
   if (row.status === 'approved') {
     return res.status(400).json({ error: 'This payment is already approved' });
   }
+  const contribution = db.prepare('SELECT amount FROM contributions WHERE id = ?').get(req.params.id);
+  const total = roundMoney(contribution?.amount || 0);
+  const sent = roundMoney(row.proof_amount || 0);
+  if (sent > 0 && sent < total) {
+    return res.status(400).json({ error: `The message says KSh ${sent.toLocaleString('en-KE')} was sent for a KSh ${total.toLocaleString('en-KE')} contribution. Ask the member to use Pay now and enter the amount they actually paid.` });
+  }
+  if (roundMoney(row.amount_paid || 0) > 0 && roundMoney(row.amount_paid || 0) < total) {
+    return res.status(400).json({ error: 'This contribution is part paid. Approved part payments cannot be completed here — ask the member to use Pay now for the balance.' });
+  }
   db.prepare(
-    "UPDATE contribution_payments SET status = 'approved', approved_at = datetime('now'), approved_by = ? WHERE id = ?"
-  ).run(req.member.id, row.id);
+    "UPDATE contribution_payments SET status = 'approved', amount_paid = ?, approved_at = datetime('now'), approved_by = ? WHERE id = ?"
+  ).run(total, req.member.id, row.id);
   res.json({ ok: true });
 });
 
@@ -1156,6 +1910,9 @@ app.post('/api/admin/members', requireActiveAdmin, (req, res) => {
   }
   const fineReason =
     targetRole === 'admin' ? '' : String(pending_fine_reason || '').trim().slice(0, 200);
+  if (fine > 0 && !fineReason) {
+    return res.status(400).json({ error: 'Give a reason for the fine (e.g. arrived late, missed a meeting)' });
+  }
   const hash = bcrypt.hashSync(String(password), 10);
   const info = db
     .prepare(
@@ -1168,12 +1925,20 @@ app.post('/api/admin/members', requireActiveAdmin, (req, res) => {
       String(bio || '').trim(),
       normalizedPhone,
       balance,
-      fine,
-      fineReason,
+      0,
+      '',
       targetRole,
       targetDesignation
     );
 
+  if (fine > 0) {
+    db.prepare('INSERT INTO fines (member_id, amount, reason, created_by) VALUES (?, ?, ?, ?)').run(
+      info.lastInsertRowid,
+      fine,
+      fineReason,
+      req.member.id
+    );
+  }
   if (targetRole === 'member') ensureCurrentPayment(info.lastInsertRowid);
   const member = db.prepare('SELECT * FROM members WHERE id = ?').get(info.lastInsertRowid);
   res.status(201).json({ member: publicMember(member) });
@@ -1206,29 +1971,6 @@ app.patch('/api/admin/members/:id/balance', requireActiveAdmin, (req, res) => {
     return res.status(400).json({ error: 'Enter a valid Previous Arrears (zero or more)' });
   }
   db.prepare('UPDATE members SET pending_balance = ? WHERE id = ?').run(balance, target.id);
-  const updated = db.prepare('SELECT * FROM members WHERE id = ?').get(target.id);
-  res.json({ member: publicMember(updated) });
-});
-
-// A fine is stored on the member itself, with the reason it was given (for
-// example lateness). Like Previous Arrears, the full amount is added to the
-// member's outstanding total. Setting it to 0 clears the fine.
-app.patch('/api/admin/members/:id/fine', requireActiveAdmin, (req, res) => {
-  const target = db.prepare('SELECT * FROM members WHERE id = ?').get(req.params.id);
-  if (!target) return res.status(404).json({ error: 'Member not found' });
-  if (target.role === 'admin') {
-    return res.status(400).json({ error: 'Admin accounts do not carry fines' });
-  }
-  const fine = parseBalance(req.body?.pending_fine);
-  if (fine === null) {
-    return res.status(400).json({ error: 'Enter a valid Fine (zero or more)' });
-  }
-  const reason = String(req.body?.reason || '').trim().slice(0, 200);
-  db.prepare('UPDATE members SET pending_fine = ?, pending_fine_reason = ? WHERE id = ?').run(
-    fine,
-    reason,
-    target.id
-  );
   const updated = db.prepare('SELECT * FROM members WHERE id = ?').get(target.id);
   res.json({ member: publicMember(updated) });
 });

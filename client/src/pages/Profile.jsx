@@ -58,15 +58,11 @@ export default function Profile() {
     ])
       .then(([{ payments }, { contributions }]) => {
         if (cancelled) return;
-        const collected = payments
-          .filter((p) => p.status === 'paid')
-          .reduce((sum, p) => sum + Number(p.total || 0), 0);
-        const outstanding = payments
-          .filter((p) => p.status !== 'paid')
-          .reduce((sum, p) => sum + Number(p.total || 0), 0);
+        const collected = payments.reduce((sum, p) => sum + Number(p.amount_paid || 0), 0);
+        const outstanding = payments.reduce((sum, p) => sum + Number(p.balance || 0), 0);
         const contribOutstanding = contributions
           .filter((c) => c.is_active !== false && c.mine?.state !== 'approved')
-          .reduce((sum, c) => sum + Number(c.amount || 0), 0);
+          .reduce((sum, c) => sum + Number(c.mine?.balance ?? c.amount ?? 0), 0);
         setSummary({ collected, count: payments.length, outstanding, contribOutstanding });
       })
       .catch(() => { });

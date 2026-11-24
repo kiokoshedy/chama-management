@@ -14,8 +14,12 @@ A small full-stack app for a group with member accounts, roles, and an admin das
 - Admin dashboard: create members, promote/demote roles, remove members
 - Profile editing (display name, bio)
 - Monthly and special contributions with pasted payment proof (M-Pesa or Bank confirmation)
+- One **Pay now** flow that can settle any mix of monthly dues, Previous Arrears, special
+  contributions and fines — all at once or in part
 - Previous Arrears: money a member already owes, recorded on the member and added to their dues
-- Fines: an admin gives one member a fine with a reason (e.g. lateness), stored on the member and added to their dues
+- Independent fines: an admin gives a member a fine with its own reason (e.g. "arrived late" or
+  "missed a meeting"). Each fine is its own record, not attached to any contribution, and can be
+  paid in full or in part.
 - Meeting minutes: admins upload the minutes of each meeting (PDF or Word) and members view or
   download them from the Minutes page
 
@@ -43,21 +47,29 @@ A default admin account is seeded on first run:
 
 Change the password by editing your profile, or set `JWT_SECRET` and `PORT` in a `server/.env`.
 
-## Payment proof
-A member cannot mark a contribution as paid without pasting the confirmation message they
-received. "I have paid" on a monthly payment or on a special contribution opens a dialog asking
-for the message — the M-Pesa "Confirmed" SMS, the bank/USSD alert, or the confirmation screen from
-a banking app.
+## Paying what you owe
+A member cannot record a payment without pasting the confirmation message they received. The
+**Pay now** button on **My payments** opens a single dialog listing every outstanding amount:
+monthly contributions, Previous Arrears, special contributions and independent fines. The member
+selects any or all of them, enters the amount actually sent, and pastes the M-Pesa "Confirmed" SMS,
+the bank/USSD alert, or the confirmation screen from a banking app.
 
 The dialog reads the message as it is typed and shows the member what was found (provider, amount,
-reference code, date, account) before they send it, and warns them if the amount does not match
-what is due. The full message is stored verbatim; the parsed values are only a summary to help the
-admin, so a message the parser cannot read is still accepted.
+reference code, date, account) before sending. The full message is stored verbatim; the parsed
+values are only a summary to help the admin, so a message the parser cannot read is still accepted.
 
-Admins see a **Proof** button on every monthly payment and contribution payment that has a message
-attached. It opens the same details side by side with the amount due and flags any mismatch before
-approving. Rejecting a monthly request clears the stored message so the member can send a fresh one,
-and members can replace a message while it is still awaiting approval.
+The amount can be less than the selected balance. While the request is waiting, it appears in
+**Awaiting approval** on the member and admin dashboards and in Recent activity. When the admin
+approves the request, only that amount is allocated to the selected items: a fully covered item
+becomes paid, and a part-paid item stays outstanding with its balance reduced. Items already
+covered by a request waiting for approval are locked so they cannot be paid twice. Members can view
+or change their message while a request is pending, or cancel it.
+
+Admins review these combined requests at the top of **Payment approvals**. Each request shows the
+member, the exact items and amounts selected, the proof message, and an Approve/Reject action.
+Approving applies the allocation to every item; rejecting releases the lock so the member can pay
+again. Older monthly "I have paid" requests and special-contribution payments are still reviewed in
+their existing sections.
 
 ## Meeting minutes
 After each group meeting an admin can publish the minutes from **Minutes** in the sidebar. The
@@ -70,22 +82,43 @@ title, notes and file details are kept in the `minutes` table in `server/group.d
 
 ## Previous Arrears, Fines, and outstanding totals
 
-Some members owe money from before the current payment records. An admin can record it on the member from the Admin dashboard (or when creating the member). The amount is stored on the member, shown separately as **Previous Arrears**, and added in full to their outstanding total on the dashboard, profile, and payments page. Set it back to `0` once it has been settled.
+Some members owe money from before the current payment records. An admin can record it on the member from the Admin dashboard. It is shown separately as **Previous Arrears** and added in full to their outstanding total on the dashboard, profile, and payments page. Set it back to `0` once it has been settled.
 
-A **Fine** works the same way but is for a specific reason, such as lateness. An admin assigns it to one member from the Admin dashboard, the member directory drawer, or the **Payment approvals** tab. The amount and reason are stored on that member, shown separately as **Fine**, and added in full to their outstanding total. Set the amount to `0` to clear a settled fine.
+**Fines are independent records.** An admin adds a fine from the **Independent fines** card on the
+Admin dashboard, the member directory drawer, or the **Payment approvals** tab. Each fine stores its
+own amount, reason, and payment progress — for example "arrived late" and "missed a meeting" can be
+two separate fines for the same member. No contribution or monthly payment is involved. Fines can be
+removed while unpaid; a part-paid fine is kept so the payment history stays accurate.
 
 A member's **Outstanding** total is the full amount they still owe, made up of:
 
-- unpaid monthly contributions,
+- the remaining balance on unpaid or part-paid monthly contributions,
 - their **Previous Arrears**,
-- their **Fine**, and
-- **open contributions** — special contributions that are active and not yet approved for that member (unpaid or awaiting admin approval).
+- the unpaid balances of all their **Fines**, and
+- **open contributions** — special contributions that are active and not yet approved (or only
+  part paid) for that member.
 
-Each part is also shown on its own so members can see what makes up the total. A contribution drops out of Outstanding once the admin approves its payment. Admin accounts do not carry balances, fines, or contributions.
+Each part is shown separately so members can see what makes up the total. Only approved allocations
+reduce a balance; a pending request does not change totals. Admin accounts do not carry balances,
+fines, or contributions.
+
+**Combined requests and part payments.** **Pay now** is the only way to submit a payment. It lets a
+member select any mix of monthly dues, special contributions, fines, and arrears, enter the amount
+actually sent, and paste one proof message. When the admin approves, the money is applied to the
+**oldest selected dues first** and only up to that entered amount. The remainder stays on the
+specific newer dues it belongs to — for example, KSh 7,500 sent for five items totaling KSh 11,000
+clears the oldest items and leaves KSh 3,500 visible on the later ones. Both **Payment requests**
+(admin) and **My payment requests** (member) show each item as **Paid**, **Part paid / balance
+left**, or still unpaid.
+
+A one-time startup repair rebuilds older requests that stored the full selected balance as the
+requested amount: it trusts the amount parsed from the proof message, corrects the request total,
+and reallocates approved money oldest-first. Older databases also get paid monthly and contribution
+records synchronized so rows marked **paid** no longer show a balance.
 
 ## Roles
-- `member` – can view directory, edit own profile
-- `admin` – everything above plus the admin dashboard and **Payment approvals** tab (approve/reject proof, assign member fines, approve special contributions, set Previous Arrears)
+- `member` – can view the directory, edit their profile, and pay any or all of their outstanding amounts
+- `admin` – everything above plus the admin dashboard and **Payment approvals** tab (review combined payment requests, approve/reject proof, add independent fines, approve special contributions, set Previous Arrears)
 
 ## Data
 Data is stored in `server/group.db` (SQLite). Delete the file to reset.

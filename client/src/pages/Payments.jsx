@@ -21,8 +21,10 @@ import { api } from '../api.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { Avatar } from '../App.jsx';
 import { ProofDialog, ProofViewer } from '../ProofDialog.jsx';
+import PayDialog from '../PayDialog.jsx';
+import FinesManager from '../FinesManager.jsx';
 import MonthExport from '../MonthExport.jsx';
-import { fmt, currency, deadlineState, todayInKenya } from '../format.js';
+import { fmt, fmtDateShort, currency, deadlineState, todayInKenya } from '../format.js';
 
 const CONTRIB_FORM = { title: '', description: '', amount: '', deadline: '' };
 
@@ -281,6 +283,8 @@ function ContributionsAdmin() {
                             <span className="approved-tag">
                               <CheckCircle2 size={14} /> Approved
                             </span>
+                          ) : p.status === 'partial' ? (
+                            <span className="badge status-partial">Part paid</span>
                           ) : (
                             <span className="badge status-requested">Awaiting approval</span>
                           )}
@@ -343,15 +347,28 @@ function ContributionsAdmin() {
 
 const statusBadge = (s) => (
   <span className={`badge status-${s}`}>
-    {s === 'paid' ? 'Paid' : s === 'requested' ? 'Awaiting approval' : 'Unpaid'}
+    {s === 'paid' ? 'Paid' : s === 'requested' ? 'Awaiting approval' : s === 'partial' ? 'Part paid' : 'Unpaid'}
   </span>
 );
 
 const contribStatus = (state) => (
-  <span className={`badge status-${state === 'approved' ? 'paid' : state === 'pending' ? 'requested' : 'unpaid'}`}>
-    {state === 'approved' ? 'Approved' : state === 'pending' ? 'Awaiting approval' : 'Not paid'}
+  <span className={`badge status-${state === 'approved' ? 'paid' : state === 'pending' ? 'requested' : state === 'partial' ? 'partial' : 'unpaid'}`}>
+    {state === 'approved' ? 'Approved' : state === 'pending' ? 'Awaiting approval' : state === 'partial' ? 'Part paid' : 'Not paid'}
   </span>
 );
+
+function requestItemResult(request, item) {
+  if (request.status === 'requested') return { label: 'Pending approval', cls: 'pending' };
+  if (request.status === 'rejected') return { label: 'Not applied', cls: 'rejected' };
+  if (item.status === 'paid') return { label: 'Paid', cls: 'paid' };
+  if (Number(item.balance) > 0) {
+    return {
+      label: `${fmt(item.balance)} left`,
+      cls: item.status === 'partial' ? 'partial' : 'unpaid',
+    };
+  }
+  return { label: 'Paid', cls: 'paid' };
+}
 
 function ContribDeadline({ deadline }) {
   const ds = deadlineState(deadline);
@@ -363,7 +380,7 @@ function ContribDeadline({ deadline }) {
   );
 }
 
-function MemberContribs({ contribs, busyId, onPay, onCancel, onEditProof, onViewProof }) {
+function MemberContribs({ contribs, busyId, onPay, onPayRest, onCancel, onEditProof, onViewProof }) {
   if (!contribs.length) return null;
   return (
     <div className="contrib-section">
@@ -406,7 +423,7 @@ function MemberContribs({ contribs, busyId, onPay, onCancel, onEditProof, onView
                   ) : (
                     <BadgeCheck size={14} />
                   )}
-                  I have paid
+                  Pay now
                 </button>
               )}
               {c.mine?.state === 'pending' && (
@@ -425,6 +442,12 @@ function MemberContribs({ contribs, busyId, onPay, onCancel, onEditProof, onView
                     Undo
                   </button>
                 </div>
+              )}
+              {c.mine?.state === 'partial' && (
+                <button className="btn sm" onClick={() => onPayRest(c)}>
+                  <Wallet size={14} />
+                  Pay the rest
+                </button>
               )}
               {c.mine?.state === 'approved' && (
                 <span className="approved-tag">
@@ -446,9 +469,13 @@ export default function Payments() {
 }
 
 function MemberPayments() {
-  const { member } = useAuth();
+  const { member, refresh } = useAuth();
   const [payments, setPayments] = useState([]);
   const [contribs, setContribs] = useState([]);
+  const [fines, setFines] = useState([]);
+  const [pendingItems, setPendingItems] = useState([]);
+  const [requests, setRequests] = useState([]);
+  const [paySelection, setPaySelection] = useState(null);
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState(null);
   const [proofForm, setProofForm] = useState(null);
@@ -457,17 +484,28 @@ function MemberPayments() {
   const [proofView, setProofView] = useState(null);
 
   const load = async () => {
-    const [{ payments }, { contributions }] = await Promise.all([
-      api.paymentsMe(),
-      api.contributions(),
-    ]);
+    const [{ payments }, { contributions }, { fines: ownFines }, { items }, { requests: ownRequests }] =
+      await Promise.all([
+        api.paymentsMe(),
+        api.contributions(),
+        api.myFines(),
+        api.paymentsPending(),
+        api.myPaymentRequests(),
+      ]);
     setPayments(payments);
     setContribs(contributions);
+    setFines(ownFines);
+    setPendingItems(items);
+    setRequests(ownRequests);
   };
 
   useEffect(() => {
     load().catch((e) => setError(e.message));
   }, []);
+
+  // Part payments must go through PayDialog so the amount sent is recorded.
+  // The old "I have paid" buttons had no amount field and cleared whole rows.
+  const openPayFor = (item) => setPaySelection({ initialKeys: item ? [item.key] : [] });
 
   // ---- Monthly contributions ----
 
@@ -486,6 +524,36 @@ function MemberPayments() {
           : 'Paste the confirmation message again — this replaces the one the admin has.',
       initialMessage: payment.proof?.message || '',
     });
+  };
+
+  // ---- Combined payment requests ----
+
+  const askRequestProof = (request) => {
+    setError('');
+    setProofError('');
+    setProofForm({
+      kind: 'request',
+      mode: 'proof',
+      id: request.id,
+      amountDue: Number(request.amount),
+      title: `Change message · ${fmt(request.amount)} request`,
+      subtitle: 'Paste the confirmation message again — this replaces the one the admin has.',
+      initialMessage: request.proof?.message || '',
+    });
+  };
+
+  const cancelRequest = async (id) => {
+    setError('');
+    setBusyId(`request-${id}`);
+    try {
+      await api.cancelPaymentRequest(id);
+      await load();
+      await refresh();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusyId(null);
+    }
   };
 
   // ---- Special contributions ----
@@ -512,7 +580,9 @@ function MemberPayments() {
     setProofError('');
     try {
       const { kind, mode, id } = proofForm;
-      if (kind === 'monthly') {
+      if (kind === 'request') {
+        await api.updatePaymentRequestProof(id, message);
+      } else if (kind === 'monthly') {
         if (mode === 'request') await api.requestPayment(id, message);
         else await api.updatePaymentProof(id, message);
       } else if (mode === 'pay') {
@@ -547,22 +617,28 @@ function MemberPayments() {
     }
   };
 
-  const paid = payments.filter((p) => p.status === 'paid').reduce((a, p) => a + p.total, 0);
-  const unpaid = payments.filter((p) => p.status !== 'paid').length;
-  const unpaidAmount = payments
-    .filter((p) => p.status !== 'paid')
-    .reduce((sum, p) => sum + Number(p.total || 0), 0);
+  const paid = payments.reduce((sum, p) => sum + Number(p.amount_paid || 0), 0);
+  const unpaid = payments.filter((p) => Number(p.balance) > 0).length;
+  const unpaidAmount = payments.reduce((sum, p) => sum + Number(p.balance || 0), 0);
   const pendingBalance = Number(member.pending_balance || 0);
   const pendingFine = Number(member.pending_fine || 0);
   const openContribsOwed = contribs.filter(
     (c) => c.is_active !== false && c.mine?.state !== 'approved'
   );
   const contribOutstanding = openContribsOwed.reduce(
-    (sum, c) => sum + Number(c.amount || 0),
+    (sum, c) => sum + Number(c.mine?.balance ?? c.amount ?? 0),
     0
   );
   const totalOutstanding =
     unpaidAmount + pendingBalance + pendingFine + contribOutstanding;
+  const outstandingParts = [];
+  if (unpaid > 0) outstandingParts.push(`Dues (${unpaid})`);
+  if (pendingBalance > 0) outstandingParts.push('Previous Arrears');
+  if (pendingFine > 0) outstandingParts.push('Fines');
+  if (contribOutstanding > 0) outstandingParts.push('open contributions');
+  const outstandingHint = outstandingParts.length
+    ? outstandingParts.join(' + ')
+    : 'Everything is fully paid';
 
   return (
     <div>
@@ -570,10 +646,14 @@ function MemberPayments() {
         <div>
           <h1>My payments</h1>
           <p className="page-sub">
-            Welcome, {member.display_name}. Once you have paid, tap "I have paid" and paste the
+            Welcome, {member.display_name}. Choose what you owe, pay any or all of it, and paste the
             M-Pesa or Bank confirmation message — the admin checks it before approving.
           </p>
         </div>
+        <button className="btn" onClick={() => openPayFor(null)}>
+          <Wallet size={16} />
+          Pay now
+        </button>
       </div>
 
       <div className="stat-grid">
@@ -585,7 +665,7 @@ function MemberPayments() {
             </span>
           </div>
           <span className="stat-value">{fmt(paid)}</span>
-          <span className="stat-hint">Across all approved payments</span>
+          <span className="stat-hint">Including part payments</span>
         </div>
         <div className="stat-card">
           <div className="stat-top">
@@ -595,9 +675,7 @@ function MemberPayments() {
             </span>
           </div>
           <span className="stat-value">{fmt(totalOutstanding)}</span>
-          <span className="stat-hint">
-            Dues ({unpaid}) + Previous Arrears + Fine + open contributions
-          </span>
+          <span className="stat-hint">{outstandingHint}</span>
         </div>
         <div className="stat-card">
           <div className="stat-top">
@@ -639,10 +717,161 @@ function MemberPayments() {
 
       {error && <p className="error">{error}</p>}
 
+      <div className="card pad wide my-requests-card" style={{ marginBottom: 24 }}>
+        <div className="section-head">
+          <span className="icon-tile blue">
+            <ReceiptText size={18} />
+          </span>
+          <div>
+            <h2 className="section-title">My payment requests</h2>
+            <p className="muted small">
+              Each request shows exactly what you paid for. Once approved, the items it settled are
+              marked paid and any unpaid balance stays on the specific dues it belongs to.
+            </p>
+          </div>
+        </div>
+
+        {requests.length === 0 ? (
+          <p className="muted small" style={{ marginTop: 14 }}>
+            You have not sent a combined payment request yet. Use <strong>Pay now</strong> above to
+            settle one or several amounts.
+          </p>
+        ) : (
+          <div className="my-request-list" style={{ marginTop: 14 }}>
+            {requests.map((r) => {
+              const remaining = r.items.reduce(
+                (sum, item) => sum + Math.max(0, Number(item.balance) || 0),
+                0
+              );
+              return (
+                <div className="my-request-row" key={r.id}>
+                  <div className="my-request-top">
+                    <div className="request-title-row">
+                      <strong>{fmt(r.amount)} sent</strong>
+                      <span className={`badge status-${r.status === 'paid' ? 'paid' : r.status === 'requested' ? 'requested' : 'rejected'}`}>
+                        {r.status === 'paid'
+                          ? 'Approved'
+                          : r.status === 'requested'
+                            ? 'Awaiting approval'
+                            : 'Rejected'}
+                      </span>
+                    </div>
+                    <span className="muted small">
+                      {fmtDateShort(String(r.requested_at).slice(0, 10))} · {r.items.length}{' '}
+                      {r.items.length === 1 ? 'item' : 'items'}
+                    </span>
+                  </div>
+                  <div className="request-items">
+                    {r.items.map((item) => {
+                      const result = requestItemResult(r, item);
+                      return (
+                        <span className="request-item" key={item.id}>
+                          <span>
+                            {item.label} <strong>{fmt(item.amount)}</strong>
+                          </span>
+                          <span className={`request-item-result ${result.cls}`}>{result.label}</span>
+                        </span>
+                      );
+                    })}
+                  </div>
+                  {r.status === 'paid' && (
+                    <div className="my-request-summary">
+                      <span>
+                        {remaining > 0
+                          ? `Still outstanding on these items: ${fmt(remaining)}`
+                          : 'All items in this request are fully paid.'}
+                      </span>
+                    </div>
+                  )}
+                  <div className="actions">
+                    {r.proof?.message && (
+                      <button
+                        className="btn ghost sm"
+                        onClick={() =>
+                          setProofView({
+                            title: `Your payment message · ${fmt(r.amount)}`,
+                            subtitle: `Request ${r.id}`,
+                            amountDue: Number(r.amount),
+                            proof: r.proof,
+                          })
+                        }
+                      >
+                        <ReceiptText size={14} />
+                        View proof
+                      </button>
+                    )}
+                    {r.status === 'requested' && (
+                      <>
+                        <button
+                          className="btn ghost sm"
+                          onClick={() => askRequestProof(r)}
+                          title="Paste a different message"
+                        >
+                          <Pencil size={14} />
+                          Change message
+                        </button>
+                        <button
+                          className="btn ghost sm"
+                          disabled={busyId === `request-${r.id}`}
+                          onClick={() => cancelRequest(r.id)}
+                        >
+                          <Undo2 size={14} />
+                          Cancel
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {fines.length > 0 && (
+        <div className="card pad wide" style={{ marginBottom: 24 }}>
+          <div className="section-head">
+            <span className="icon-tile amber">
+              <TriangleAlert size={18} />
+            </span>
+            <div>
+              <h2 className="section-title">Fines</h2>
+              <p className="muted small">
+                Given for a specific reason. Use “Pay now” to settle one, several, or part of them.
+              </p>
+            </div>
+          </div>
+          <div className="fines-list" style={{ marginTop: 14 }}>
+            {fines.map((fine) => (
+              <div className="fine-row" key={fine.id}>
+                <div className="fine-row-copy">
+                  <strong>{fine.reason || 'Fine'}</strong>
+                  <span className="muted small">
+                    Added {new Date(String(fine.created_at).replace(' ', 'T')).toLocaleDateString('en-GB')}
+                  </span>
+                </div>
+                <span className="fine-row-amount">
+                  <strong>{fmt(fine.amount)}</strong>
+                  {fine.status !== 'unpaid' && (
+                    <span className="muted small">
+                      {fine.status === 'paid' ? 'Paid in full' : `${fmt(fine.amount_paid)} paid`}
+                    </span>
+                  )}
+                </span>
+                <span className={`badge status-${fine.status}`}>
+                  {fine.status === 'paid' ? 'Paid' : fine.status === 'partial' ? 'Part paid' : 'Unpaid'}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <MemberContribs
         contribs={contribs}
         busyId={busyId}
-        onPay={askContribProof}
+        onPay={(c) => openPayFor(pendingItems.find((i) => i.type === 'contribution' && i.id === c.id))}
+        onPayRest={(c) => openPayFor(pendingItems.find((i) => i.type === 'contribution' && i.id === c.id))}
         onCancel={cancel}
         onEditProof={(c) => askContribProof(c, 'proof')}
         onViewProof={(c) =>
@@ -684,8 +913,8 @@ function MemberPayments() {
                 <th>Month</th>
                 <th>Due date</th>
                 <th>Contribution</th>
-                <th>Fine</th>
-                <th>Total</th>
+                <th>Paid</th>
+                <th>Balance</th>
                 <th>Status</th>
                 <th></th>
               </tr>
@@ -707,18 +936,11 @@ function MemberPayments() {
                     )}
                   </td>
                   <td>{fmt(p.amount)}</td>
+                  <td>{fmt(p.amount_paid || 0)}</td>
                   <td>
-                    {p.fine > 0 ? (
-                      <>
-                        <strong className="fine-amount">{fmt(p.fine)}</strong>
-                        {p.fine_reason && <div className="fine-reason">{p.fine_reason}</div>}
-                      </>
-                    ) : (
-                      <span className="muted">—</span>
-                    )}
-                  </td>
-                  <td>
-                    <strong>{fmt(p.total)}</strong>
+                    <strong className={Number(p.balance) > 0 ? 'fine-amount' : ''}>
+                      {fmt(p.balance ?? p.total)}
+                    </strong>
                   </td>
                   <td>{statusBadge(p.status)}</td>
                   <td>
@@ -731,10 +953,13 @@ function MemberPayments() {
                       </div>
                     )}
                     <div className="actions">
-                      {p.status === 'unpaid' && (
-                        <button className="btn subtle sm" onClick={() => askMonthlyProof(p)}>
+                      {(p.status === 'unpaid' || p.status === 'partial') && (
+                        <button
+                          className="btn subtle sm"
+                          onClick={() => openPayFor(pendingItems.find((i) => i.type === 'monthly' && i.id === p.id))}
+                        >
                           <BadgeCheck size={14} />
-                          I have paid
+                          {p.status === 'partial' ? 'Pay the rest' : 'Pay now'}
                         </button>
                       )}
                       {p.status === 'requested' && (
@@ -764,6 +989,19 @@ function MemberPayments() {
         </div>
       )}
 
+      {paySelection && (
+        <PayDialog
+          items={pendingItems}
+          initialKeys={paySelection.initialKeys}
+          onClose={() => setPaySelection(null)}
+          onPaid={async () => {
+            setPaySelection(null);
+            await load();
+            await refresh();
+          }}
+        />
+      )}
+
       {proofForm && (
         <ProofDialog
           title={proofForm.title}
@@ -791,34 +1029,35 @@ function MemberPayments() {
 }
 
 function AdminPayments() {
+  const { refresh } = useAuth();
   const [payments, setPayments] = useState([]);
   const [members, setMembers] = useState([]);
+  const [requests, setRequests] = useState([]);
   const [dueDates, setDueDates] = useState({});
   const [busyDueId, setBusyDueId] = useState(null);
+  const [busyRequest, setBusyRequest] = useState(null);
   const [error, setError] = useState('');
-  const [fines, setFines] = useState({});
-  const [fineReasons, setFineReasons] = useState({});
-  const [memberFines, setMemberFines] = useState({});
-  const [memberFineReasons, setMemberFineReasons] = useState({});
-  const [memberFineMsg, setMemberFineMsg] = useState('');
   const [filterMember, setFilterMember] = useState('');
   const [filterPeriod, setFilterPeriod] = useState('');
   const [proofView, setProofView] = useState(null);
 
   const load = async () => {
-    const [{ payments: rows, filters }, membersList] = await Promise.all([
+    const [{ payments: rows, filters }, membersList, { requests: requestRows }] = await Promise.all([
       api.adminPayments(),
       api.members(),
+      api.adminPaymentRequests(),
     ]);
     setPayments(rows);
     setMembers(membersList.members);
-    setMemberFines(Object.fromEntries(membersList.members.map((m) => [m.id, m.pending_fine || 0])));
-    setMemberFineReasons(
-      Object.fromEntries(membersList.members.map((m) => [m.id, m.pending_fine_reason || '']))
-    );
+    setRequests(requestRows);
     setFilterPeriod(filters?.period || '');
     setFilterMember(filters?.member_id != null ? String(filters.member_id) : '');
     setDueDates(Object.fromEntries(rows.map((p) => [p.id, p.due_date || ''])));
+  };
+
+  const reload = async () => {
+    await load();
+    await refresh();
   };
 
   useEffect(() => {
@@ -838,55 +1077,25 @@ function AdminPayments() {
 
   const approve = async (id) => {
     await api.approvePayment(id);
-    await load();
+    await reload();
   };
 
   const reject = async (id) => {
     await api.rejectPayment(id);
-    await load();
+    await reload();
   };
 
-  const fine = async (id) => {
-    const amount = Number(fines[id]);
-    if (!Number.isFinite(amount) || amount < 0) return;
-    try {
-      await api.finePayment(id, amount, fineReasons[id] || '');
-      setFines({ ...fines, [id]: '' });
-      setFineReasons({ ...fineReasons, [id]: '' });
-      await load();
-    } catch (e) {
-      setError(e.message);
-    }
-  };
-
-  const clearFine = async (id) => {
-    try {
-      await api.finePayment(id, 0, '');
-      await load();
-    } catch (e) {
-      setError(e.message);
-    }
-  };
-
-  const saveMemberFine = async (m) => {
+  const decideRequest = async (id, decision) => {
     setError('');
-    setMemberFineMsg('');
+    setBusyRequest(id);
     try {
-      const { member } = await api.setMemberFine(
-        m.id,
-        memberFines[m.id] ?? 0,
-        memberFineReasons[m.id] ?? ''
-      );
-      setMembers((rows) => rows.map((row) => (row.id === member.id ? member : row)));
-      setMemberFines((current) => ({ ...current, [m.id]: member.pending_fine }));
-      setMemberFineReasons((current) => ({ ...current, [m.id]: member.pending_fine_reason }));
-      setMemberFineMsg(
-        member.pending_fine > 0
-          ? `Fine saved for ${member.display_name}.`
-          : `Fine cleared for ${member.display_name}.`
-      );
+      if (decision === 'approve') await api.approvePaymentRequest(id);
+      else await api.rejectPaymentRequest(id);
+      await reload();
     } catch (e) {
       setError(e.message);
+    } finally {
+      setBusyRequest(null);
     }
   };
 
@@ -908,7 +1117,7 @@ function AdminPayments() {
   const summary = payments.filter((p) => p.period === latest).reduce(
     (acc, p) => {
       acc[p.status] = (acc[p.status] || 0) + 1;
-      if (p.status === 'paid') acc.collected += p.total;
+      if (p.status === 'paid') acc.collected += Number(p.amount_paid || 0);
       return acc;
     },
     { paid: 0, requested: 0, unpaid: 0, collected: 0 }
@@ -919,59 +1128,120 @@ function AdminPayments() {
       <div className="page-header">
         <div>
           <h1>Payment approvals</h1>
-          <p className="page-sub">Review member payment proof, approve contributions, and apply fines.</p>
+          <p className="page-sub">
+            Review combined payment requests, approve contributions, and give members fines with
+            their own reasons.
+          </p>
         </div>
       </div>
 
-      <div className="card pad" style={{ marginBottom: 16 }}>
+      <div className="card pad requests-card" style={{ marginBottom: 16 }}>
         <div className="row-between" style={{ gap: 10 }}>
-          <div>
-            <h2 className="section-title">Member fines</h2>
-            <p className="muted small" style={{ marginTop: 3 }}>
-              Give one member a fine with a reason. It is added to their outstanding total,
-              separate from monthly fines. Set 0 to clear it.
-            </p>
+          <div className="section-head">
+            <span className="icon-tile blue">
+              <ReceiptText size={18} />
+            </span>
+            <div>
+              <h2 className="section-title">Payment requests</h2>
+              <p className="muted small" style={{ marginTop: 3 }}>
+                Members can pay any or all of their dues — monthly, arrears, special contributions
+                and fines — in one request, including part payments. Approve a request to update
+                every balance it covers.
+              </p>
+            </div>
           </div>
           <span className="badge pending">
-            {fmt(members.reduce((sum, m) => sum + Number(m.pending_fine || 0), 0))}
+            {requests.filter((r) => r.status === 'requested').length} awaiting
           </span>
         </div>
-        <div className="member-fine-list">
-          {members
-            .filter((m) => m.role === 'member')
-            .map((m) => (
-              <div className="member-fine-row" key={m.id}>
-                <span className="member-fine-name">{m.display_name}</span>
-                <div className="member-phone-edit member-fine-edit">
-                  <TriangleAlert size={14} />
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={memberFines[m.id] ?? m.pending_fine ?? 0}
-                    onChange={(e) =>
-                      setMemberFines((current) => ({ ...current, [m.id]: e.target.value }))
-                    }
-                    placeholder="0"
-                    aria-label={`Fine for ${m.display_name}`}
-                  />
-                  <input
-                    value={memberFineReasons[m.id] ?? m.pending_fine_reason ?? ''}
-                    onChange={(e) =>
-                      setMemberFineReasons((current) => ({ ...current, [m.id]: e.target.value }))
-                    }
-                    placeholder="Reason (e.g. lateness)"
-                    aria-label={`Reason for ${m.display_name}'s fine`}
-                  />
-                  <button className="btn ghost sm" onClick={() => saveMemberFine(m)}>
-                    Save
-                  </button>
+
+        {requests.length === 0 ? (
+          <p className="muted small" style={{ marginTop: 14 }}>
+            No payment requests have been sent yet.
+          </p>
+        ) : (
+          <div className="request-list" style={{ marginTop: 14 }}>
+            {requests.map((r) => (
+              <div className="request-row" key={r.id}>
+                <Avatar name={r.display_name} className="sm" />
+                <div className="request-copy">
+                  <div className="request-title-row">
+                    <strong>{r.display_name}</strong>
+                    <span className={`badge status-${r.status}`}>
+                      {r.status === 'requested'
+                        ? 'Awaiting approval'
+                        : r.status === 'paid'
+                          ? 'Approved'
+                          : 'Rejected'}
+                    </span>
+                  </div>
+                  <span className="muted small">
+                    @{r.username} · {fmtDateShort(String(r.requested_at).slice(0, 10))} ·{' '}
+                    {r.items.length} {r.items.length === 1 ? 'item' : 'items'}
+                  </span>
+                  <div className="request-items">
+                    {r.items.map((item) => {
+                      const result = requestItemResult(r, item);
+                      return (
+                        <span className="request-item" key={item.id}>
+                          <span>
+                            {item.label} <strong>{fmt(item.amount)}</strong>
+                          </span>
+                          <span className={`request-item-result ${result.cls}`}>{result.label}</span>
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+                <strong className="request-amount">{fmt(r.amount)}</strong>
+                <div className="actions">
+                  {r.proof?.message && (
+                    <button
+                      className="btn ghost sm"
+                      onClick={() =>
+                        setProofView({
+                          title: `${r.display_name}'s payment message`,
+                          subtitle: `Combined request · ${fmt(r.amount)}`,
+                          amountDue: Number(r.amount),
+                          proof: r.proof,
+                        })
+                      }
+                    >
+                      <ReceiptText size={14} />
+                      Proof
+                    </button>
+                  )}
+                  {r.status === 'requested' && (
+                    <>
+                      <button
+                        className="btn sm"
+                        disabled={busyRequest === r.id}
+                        onClick={() => decideRequest(r.id, 'approve')}
+                      >
+                        {busyRequest === r.id ? (
+                          <Loader2 size={14} className="spin-ico" />
+                        ) : (
+                          <BadgeCheck size={14} />
+                        )}
+                        Approve
+                      </button>
+                      <button
+                        className="btn sm ghost"
+                        disabled={busyRequest === r.id}
+                        onClick={() => decideRequest(r.id, 'reject')}
+                      >
+                        Reject
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
             ))}
-        </div>
-        {memberFineMsg && <p className="muted small" style={{ marginTop: 8 }}>{memberFineMsg}</p>}
+          </div>
+        )}
       </div>
+
+      <FinesManager members={members} onChange={reload} title="Independent fines" />
 
       <ContributionsAdmin />
 
@@ -1081,8 +1351,8 @@ function AdminPayments() {
                 <th>Month</th>
                 <th>Due date</th>
                 <th>Contribution</th>
-                <th>Fine</th>
-                <th>Total</th>
+                <th>Paid</th>
+                <th>Balance</th>
                 <th>Status</th>
                 <th>Actions</th>
               </tr>
@@ -1116,18 +1386,11 @@ function AdminPayments() {
                     <span className="field-hint">Reminder is sent 5 days before.</span>
                   </td>
                   <td>{fmt(p.amount)}</td>
+                  <td>{fmt(p.amount_paid || 0)}</td>
                   <td>
-                    {p.fine > 0 ? (
-                      <>
-                        <strong className="fine-amount">{fmt(p.fine)}</strong>
-                        {p.fine_reason && <div className="fine-reason">{p.fine_reason}</div>}
-                      </>
-                    ) : (
-                      <span className="muted">—</span>
-                    )}
-                  </td>
-                  <td>
-                    <strong>{fmt(p.total)}</strong>
+                    <strong className={Number(p.balance) > 0 ? 'fine-amount' : ''}>
+                      {fmt(p.balance ?? p.total)}
+                    </strong>
                   </td>
                   <td>{statusBadge(p.status)}</td>
                   <td>
@@ -1148,7 +1411,7 @@ function AdminPayments() {
                           Proof
                         </button>
                       )}
-                      {p.status !== 'paid' && (
+                      {p.status !== 'paid' && p.status !== 'partial' && (
                         <button className="btn sm" title="Mark as paid" onClick={() => approve(p.id)}>
                           Approve
                         </button>
@@ -1158,42 +1421,6 @@ function AdminPayments() {
                           Reject
                         </button>
                       )}
-                      <div className="fine-form" title="Set a fine for this member">
-                        <input
-                          className="fine-input"
-                          type="number"
-                          min="0"
-                          step="any"
-                          placeholder={`Fine (${currency})`}
-                          value={fines[p.id] ?? ''}
-                          onChange={(e) => setFines({ ...fines, [p.id]: e.target.value })}
-                        />
-                        <input
-                          className="fine-input reason"
-                          type="text"
-                          maxLength={200}
-                          placeholder="Reason"
-                          value={fineReasons[p.id] ?? ''}
-                          onChange={(e) => setFineReasons({ ...fineReasons, [p.id]: e.target.value })}
-                        />
-                        <button
-                          className="btn sm ghost"
-                          disabled={!Number(fines[p.id])}
-                          title={p.fine > 0 ? 'Replace the current fine' : 'Apply a fine'}
-                          onClick={() => fine(p.id)}
-                        >
-                          {p.fine > 0 ? `Update (${fmt(p.fine)})` : 'Add fine'}
-                        </button>
-                        {p.fine > 0 && (
-                          <button
-                            className="btn sm subtle"
-                            title="Remove this fine"
-                            onClick={() => clearFine(p.id)}
-                          >
-                            Clear
-                          </button>
-                        )}
-                      </div>
                     </div>
                   </td>
                 </tr>

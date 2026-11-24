@@ -455,6 +455,18 @@
   border-color: var(--amber-border);
 }
 
+.badge.status-partial {
+  background: var(--violet-soft, var(--blue-soft));
+  color: var(--violet-text, var(--blue-text));
+  border-color: var(--violet-border, var(--blue-border));
+}
+
+.badge.status-rejected {
+  background: var(--red-soft);
+  color: var(--red-text);
+  border-color: var(--red-border);
+}
+
 .badge.status-sent {
   background: var(--green-soft);
   color: var(--green-text);
