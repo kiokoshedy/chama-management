@@ -45,6 +45,7 @@ export default function Constitution() {
   const [dragActive, setDragActive] = useState(false);
   const [busyDownload, setBusyDownload] = useState(false);
   const fileInput = useRef(null);
+  const previewRef = useRef(null);
 
   const loadDocument = async () => {
     const data = await api.constitution();
@@ -120,6 +121,12 @@ export default function Constitution() {
   };
 
   const view = async () => {
+    // Word documents render inline below; jumping there avoids the browser
+    // treating the blob URL as a download.
+    if (isDocx(meta) && viewBlob) {
+      previewRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
+    }
     if (viewUrl) {
       openUrl(viewUrl, meta?.name);
       return;
@@ -179,12 +186,10 @@ export default function Constitution() {
 
   const documentActions = (
     <div className="page-header-actions">
-      {isPdf(meta) && (
-        <button className="btn" onClick={view}>
-          {viewState === 'ready' || viewUrl ? <Eye size={16} /> : <ExternalLink size={16} />}
-          View
-        </button>
-      )}
+      <button className="btn" onClick={view}>
+        {viewState === 'ready' || viewUrl ? <Eye size={16} /> : <ExternalLink size={16} />}
+        View
+      </button>
       <button className="btn ghost" onClick={download} disabled={busyDownload}>
         {busyDownload ? <Loader2 size={15} className="spin-ico" /> : <Download size={15} />}
         Download
@@ -227,7 +232,7 @@ export default function Constitution() {
             </div>
             {documentActions}
           </div>
-          <div className="word-preview-wrap">
+          <div className="word-preview-wrap" ref={previewRef}>
             <WordPreview blob={viewBlob} name={meta.name} url={viewUrl} onDownload={download} />
           </div>
         </div>
@@ -247,17 +252,8 @@ export default function Constitution() {
         {viewState === 'error' && (
           <div className="alert info" style={{ marginBottom: 0 }}>
             <TriangleAlert size={17} />
-            <span>
-              The published file is no longer available on the server. Upload the document again,
-              or retry if it was just replaced.
-            </span>
-            <button
-              className="btn sm ghost"
-              style={{ marginLeft: 'auto', flexShrink: 0 }}
-              onClick={() => loadDocument().catch((e) => setUploadError(e.message))}
-            >
-              Retry
-            </button>
+            The document is published but the inline preview couldn't load. Use the View or
+            Download buttons above to read it.
           </div>
         )}
       </div>
