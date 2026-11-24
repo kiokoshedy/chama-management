@@ -444,16 +444,14 @@ export default function Minutes() {
                 </div>
 
                 <div className="minutes-actions">
-                  {pdf && (
-                    <button
-                      className="btn sm"
-                      onClick={() => view(minute)}
-                      disabled={viewing || deleting}
-                    >
-                      {viewing ? <Eye size={14} className="spin-ico" /> : <Eye size={14} />}
-                      View
-                    </button>
-                  )}
+                  <button
+                    className="btn sm"
+                    onClick={() => view(minute)}
+                    disabled={viewing || deleting}
+                  >
+                    {viewing ? <Eye size={14} className="spin-ico" /> : <Eye size={14} />}
+                    View
+                  </button>
                   <button
                     className="btn ghost sm"
                     onClick={() => download(minute)}
