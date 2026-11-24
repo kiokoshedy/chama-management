@@ -149,6 +149,11 @@ export default function Dashboard() {
   const openContribsOwed = isAdmin
     ? []
     : openContribs.filter((c) => c.mine?.state !== 'approved');
+  const deadlineContribs = isAdmin
+    ? openContribs
+    : openContribs.filter(
+        (c) => c.mine?.state !== 'approved' && c.mine?.state !== 'pending'
+      );
   const contribOutstanding = openContribsOwed.reduce(
     (sum, c) => sum + Number(c.mine?.balance ?? c.amount ?? 0),
     0
@@ -466,11 +471,15 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {openContribs.length === 0 ? (
-              <p className="muted small">No special contributions are running right now.</p>
+            {deadlineContribs.length === 0 ? (
+              <p className="muted small">
+                {isAdmin
+                  ? 'No special contributions are running right now.'
+                  : 'You have no unpaid contributions right now.'}
+              </p>
             ) : (
               <div className="deadline-list">
-                {openContribs.slice(0, 5).map((c) => {
+                {deadlineContribs.slice(0, 5).map((c) => {
                   const ds = deadlineState(c.deadline);
                   return (
                     <div className="deadline-item" key={c.id}>
